@@ -25,32 +25,28 @@ RUN chmod +x /app/fix_freq_rk3576.sh
 # 1. DeepSeek-R1-Distill-Qwen-1.5B_FP16
 FROM base AS deepseek-r1-distill-qwen-1.5b-fp16-rk3576
 # 直接复制预转换好的模型文件
-RUN cd /app/models/ && \
-    ./models/RK3576/LLM/DeepSeek-R1-Distill-Qwen/DeepSeek-R1-Distill-Qwen-1.5B_FP16_RK3576.sh
+RUN wget https://huggingface.co/JiahaoLi/DeepSeek-R1-Distill-Qwen-RK3576/resolve/main/DeepSeek-R1-Distill-Qwen-1.5B_W4A16_G128_RK3576.rkllm -o /app/models/DeepSeek-R1-Distill-Qwen-1.5B_W4A16_G128_RK3576.rkllm
 COPY ./src/flask_server.py /app/
 EXPOSE 8080
 CMD ["python", "/app/flask_server.py", "--rkllm_model_path", "/app/models/DeepSeek-R1-Distill-Qwen-1.5B_FP16_RK3576.rkllm", "--target_platform", "rk3576"]
 
 # 2. DeepSeek-R1-Distill-Qwen-1.5B_W4A16
 FROM base AS deepseek-r1-distill-qwen-1.5b-w4a16-rk3576
-RUN cd /app/models/ && \
-    ./models/RK3576/LLM/DeepSeek-R1-Distill-Qwen/DeepSeek-R1-Distill-Qwen-1.5B_W4A16_RK3576.sh
+RUN wget https://huggingface.co/JiahaoLi/DeepSeek-R1-Distill-Qwen-RK3576/resolve/main/DeepSeek-R1-Distill-Qwen-1.5B_W4A16_RK3576.rkllm -o /app/models/DeepSeek-R1-Distill-Qwen-1.5B_W4A16_RK3576.rkllm
 COPY ./src/flask_server.py /app/
 EXPOSE 8080
 CMD ["python", "/app/flask_server.py", "--rkllm_model_path", "/app/models/DeepSeek-R1-Distill-Qwen-1.5B_W4A16_RK3576.rkllm", "--target_platform", "rk3576"]
 
 # 3. DeepSeek-R1-Distill-Qwen-7B_W4A16
 FROM base AS deepseek-r1-distill-qwen-7b-w4a16-rk3576
-RUN cd /app/models/ && \
-    ./models/RK3576/LLM/DeepSeek-R1-Distill-Qwen/DeepSeek-R1-Distill-Qwen-7B_W4A16_RK3576.sh
+RUN wget https://huggingface.co/JiahaoLi/DeepSeek-R1-Distill-Qwen-RK3576/resolve/main/DeepSeek-R1-Distill-Qwen-7B_W4A16_RK3576.rkllm -o /app/models/DeepSeek-R1-Distill-Qwen-7B_W4A16_RK3576.rkllm
 COPY ./src/flask_server.py /app/
 EXPOSE 8080
 CMD ["python", "/app/flask_server.py", "--rkllm_model_path", "/app/models/DeepSeek-R1-Distill-Qwen-7B_W4A16_RK3576.rkllm", "--target_platform", "rk3576"]
 
 # 4. DeepSeek-R1-Distill-Qwen-7B_W4A16_G128 (修正了拼写 Owen -> Qwen)
 FROM base AS deepseek-r1-distill-qwen-7b-w4a16-g128-rk3576
-RUN cd /app/models/ && \
-    ./models/RK3576/LLM/DeepSeek-R1-Distill-Qwen/DeepSeek-R1-Distill-Qwen-7B_W4A16_G128_RK3576.sh
+RUN wget https://huggingface.co/JiahaoLi/DeepSeek-R1-Distill-Qwen-RK3576/resolve/main/DeepSeek-R1-Distill-Qwen-7B_W4A16_G128_RK3576.rkllm -o /app/models/DeepSeek-R1-Distill-Qwen-7B_W4A16_G128_RK3576.rkllm
 COPY ./src/flask_server.py /app/
 EXPOSE 8080
 CMD ["python", "/app/flask_server.py", "--rkllm_model_path", "/app/models/DeepSeek-R1-Distill-Qwen-7B_W4A16_G128_RK3576.rkllm", "--target_platform", "rk3576"]
