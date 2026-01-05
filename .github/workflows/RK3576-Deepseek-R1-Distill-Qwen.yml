@@ -83,11 +83,13 @@ jobs:
         id: meta
         uses: docker/metadata-action@v5
         with:
-          images: ${{ env.REGISTRY }}/${{ env.IMAGE_BASE_NAME }}/${{ matrix.alias }}
+          # --- 核心修改：移除 ${{ matrix.alias }}，所有镜像共用一个仓库名 ---
+          images: ${{ env.REGISTRY }}/${{ env.IMAGE_BASE_NAME }}
+          # -----------------------------------------------------------
+          # --- 核心修改：将模型描述作为 Tag 的前缀 ---
           tags: |
-            type=raw,value=latest
-            type=ref,event=branch
-            type=sha,prefix={{date 'YYYYMMDD'}}-
+            type=raw,value=${{ matrix.alias }}-latest
+            type=raw,value=${{ matrix.alias }}-${{ github.sha }}
 
       # 6. 执行构建并推送
       - name: Build and push
