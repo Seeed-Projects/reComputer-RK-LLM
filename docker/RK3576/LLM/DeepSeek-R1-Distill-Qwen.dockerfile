@@ -1,5 +1,3 @@
-# 多阶段构建 - 为每个模型创建单独的镜像
-
 # 通用基础阶段
 FROM python:3.10-slim as base
 
@@ -8,18 +6,19 @@ RUN apt-get update && \
     apt-get install -y wget curl git && \
     rm -rf /var/lib/apt/lists/*
 
-# 安装Python依赖
-RUN pip install --no-cache-dir rkllm
-
 # 创建模型目录
 RUN mkdir -p /app/models
 
+# 安装Python依赖
+COPY ./src/flask_server_requirements.txt /app/requirements.txt
+RUN pip install --no-cache-dir -r /app/requirements.txt
+
 # 下载RKLLM运行时库
-RUN wget https://github.com/airockchip/rknn-llm/releases/download/v1.0.0/librkllmrt.so -O /usr/lib/librkllmrt.so
+COPY ./src/librkllmrt.so /usr/lib/librkllmrt.so
 
 # 安装RK3576频率修复脚本
-RUN wget https://github.com/airockchip/rknn-llm/raw/main/scripts/fix_freq_rk3576.sh -O /app/fix_freq_rk3576.sh && \
-    chmod +x /app/fix_freq_rk3576.sh
+COPY ./src/fix_freq_rk3576.sh /app/fix_freq_rk3576.sh
+RUN chmod +x /app/fix_freq_rk3576.sh
 
 # 运行频率修复脚本
 RUN /app/fix_freq_rk3576.sh
@@ -31,9 +30,9 @@ COPY ./models/RK3576/LLM/DeepSeek-R1-Distill-Qwen/DeepSeek-R1-Distill-Qwen-1.5B_
 RUN chmod +x /app/scripts/DeepSeek-R1-Distill-Qwen-1.5B_FP16_RK3576.sh
 RUN cd /app/scripts && ./DeepSeek-R1-Distill-Qwen-1.5B_FP16_RK3576.sh
 RUN mv /app/scripts/DeepSeek-R1-Distill-Qwen-1.5B_FP16_RK3576.rkllm /app/models/
-COPY ./src/llm_api.py /app/
+COPY ./src/flask_server.py /app/
 EXPOSE 8000
-CMD ["python", "/app/llm_api.py"]
+CMD ["python", "/app/flask_server.py", "--rkllm_model_path", "/app/models/DeepSeek-R1-Distill-Qwen-1.5B_FP16_RK3576.rkllm", "--target_platform", "rk3576"]
 
 
 # DeepSeek-R1-Distill-Qwen-1.5B_W4A16_RK3576 镜像
@@ -42,9 +41,9 @@ COPY ./models/RK3576/LLM/DeepSeek-R1-Distill-Qwen/DeepSeek-R1-Distill-Qwen-1.5B_
 RUN chmod +x /app/scripts/DeepSeek-R1-Distill-Qwen-1.5B_W4A16_RK3576.sh
 RUN cd /app/scripts && ./DeepSeek-R1-Distill-Qwen-1.5B_W4A16_RK3576.sh
 RUN mv /app/scripts/DeepSeek-R1-Distill-Qwen-1.5B_W4A16_RK3576.rkllm /app/models/
-COPY ./src/llm_api.py /app/
+COPY ./src/flask_server.py /app/
 EXPOSE 8000
-CMD ["python", "/app/llm_api.py"]
+CMD ["python", "/app/flask_server.py", "--rkllm_model_path", "/app/models/DeepSeek-R1-Distill-Qwen-1.5B_W4A16_RK3576.rkllm", "--target_platform", "rk3576"]
 
 
 # DeepSeek-R1-Distill-Qwen-7B_W4A16_RK3576 镜像
@@ -53,9 +52,9 @@ COPY ./models/RK3576/LLM/DeepSeek-R1-Distill-Qwen/DeepSeek-R1-Distill-Qwen-7B_W4
 RUN chmod +x /app/scripts/DeepSeek-R1-Distill-Qwen-7B_W4A16_RK3576.sh
 RUN cd /app/scripts && ./DeepSeek-R1-Distill-Qwen-7B_W4A16_RK3576.sh
 RUN mv /app/scripts/DeepSeek-R1-Distill-Qwen-7B_W4A16_RK3576.rkllm /app/models/
-COPY ./src/llm_api.py /app/
+COPY ./src/flask_server.py /app/
 EXPOSE 8000
-CMD ["python", "/app/llm_api.py"]
+CMD ["python", "/app/flask_server.py", "--rkllm_model_path", "/app/models/DeepSeek-R1-Distill-Qwen-7B_W4A16_RK3576.rkllm", "--target_platform", "rk3576"]
 
 
 # DeepSeek-R1-Distill-Owen-7B_W4A16_G128_RK3576 镜像
@@ -64,6 +63,6 @@ COPY ./models/RK3576/LLM/DeepSeek-R1-Distill-Qwen/DeepSeek-R1-Distill-Owen-7B_W4
 RUN chmod +x /app/scripts/DeepSeek-R1-Distill-Owen-7B_W4A16_G128_RK3576.sh
 RUN cd /app/scripts && ./DeepSeek-R1-Distill-Owen-7B_W4A16_G128_RK3576.sh
 RUN mv /app/scripts/DeepSeek-R1-Distill-Qwen-7B_W4A16_G128_RK3576.rkllm /app/models/DeepSeek-R1-Distill-Owen-7B_W4A16_G128_RK3576.rkllm
-COPY ./src/llm_api.py /app/
+COPY ./src/flask_server.py /app/
 EXPOSE 8000
-CMD ["python", "/app/llm_api.py"]
+CMD ["python", "/app/flask_server.py", "--rkllm_model_path", "/app/models/DeepSeek-R1-Distill-Owen-7B_W4A16_G128_RK3576.rkllm", "--target_platform", "rk3576"]
