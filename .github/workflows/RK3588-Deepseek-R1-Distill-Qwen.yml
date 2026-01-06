@@ -1,0 +1,102 @@
+name: Build and Push DeepSeek-R1-RK3588 Series
+
+on:
+  push:
+    branches: [ main, master ]
+    paths:
+      - 'src/**'
+      - 'docker/RK3576/LLM/DeepSeek-R1-Distill-Qwen.dockerfile'
+      - '.github/workflows/**'
+  workflow_dispatch:
+
+env:
+  REGISTRY: ghcr.io
+  # 【核心修改】直接指定 Package 名称，不再使用 github.repository (避免带上用户名/仓库名这种结构)
+  # 最终镜像路径会是: ghcr.io/lj-hao/RK3576-Deepseek-R1-Distill-Qwen
+  IMAGE_BASE_NAME: ${{ github.repository_owner }}/RK3576-Deepseek-R1-Distill-Qwen
+
+jobs:
+  build-and-push:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      packages: write
+
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - alias: "1.5b-fp16"
+            file: "DeepSeek-R1-Distill-Qwen-1.5B_FP16_RK3588.rkllm"
+            url: "https://huggingface.co/JiahaoLi/DeepSeek-R1-Distill-Qwen-RK3588/resolve/main/DeepSeek-R1-Distill-Qwen-1.5B_FP16_RK3588.rkllm"
+          
+          - alias: "1.5b-w8a8"
+            file: "DeepSeek-R1-Distill-Qwen-1.5B_W8A8_RK3588.rkllm"
+            url: "https://huggingface.co/JiahaoLi/DeepSeek-R1-Distill-Qwen-RK3588/resolve/main/DeepSeek-R1-Distill-Qwen-1.5B_W8A8_RK3588.rkllm"
+
+          - alias: "7b-w8a8"
+            file: "DeepSeek-R1-Distill-Qwen-7B_W8A8_RK3588.rkllm"
+            url: "https://huggingface.co/JiahaoLi/DeepSeek-R1-Distill-Qwen-RK3588/resolve/main/DeepSeek-R1-Distill-Qwen-7B_W8A8_RK3588.rkllm"
+          
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+        with:
+          lfs: true
+
+      # 强制拉取 LFS，防止 .so 文件失效
+      - name: Force LFS Pull
+        run: |
+          git lfs install
+          git lfs pull
+
+      - name: Free Disk Space
+        uses: jlumbroso/free-disk-space@main
+        with:
+          tool-cache: true
+          android: true
+          dotnet: true
+          large-packages: true
+          docker-images: true
+
+      - name: Set up QEMU
+        uses: docker/setup-qemu-action@v3
+        with:
+          platforms: arm64
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Log in to GHCR
+        uses: docker/login-action@v3
+        with:
+          registry: ${{ env.REGISTRY }}
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Extract metadata
+        id: meta
+        uses: docker/metadata-action@v5
+        with:
+          images: ${{ env.REGISTRY }}/${{ env.IMAGE_BASE_NAME }}
+          # 【核心修改】生成的标签将只包含 1.5b-w4a16-latest 等
+          tags: |
+            type=raw,value=${{ matrix.alias }}-latest
+
+      - name: Build and push
+        uses: docker/build-push-action@v5
+        with:
+          context: .
+          file: ./docker/RK3576/LLM/DeepSeek-R1-Distill-Qwen.dockerfile
+          target: model-image 
+          push: true
+          platforms: linux/arm64
+          provenance: false
+          build-args: |
+            MODEL_URL=${{ matrix.url }}
+            MODEL_FILE=${{ matrix.file }}
+          tags: ${{ steps.meta.outputs.tags }}
+          labels: ${{ steps.meta.outputs.labels }}
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
