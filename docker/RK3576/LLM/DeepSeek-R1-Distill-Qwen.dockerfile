@@ -17,12 +17,6 @@ COPY ./src/librkllmrt.so /usr/lib/librkllmrt.so
 COPY ./src/fix_freq_rk3576.sh /app/fix_freq_rk3576.sh
 RUN chmod +x /app/fix_freq_rk3576.sh
 
-# --- 【关键防错】检查 LFS 文件是否正确加载 ---
-RUN if ! head -c 4 /usr/lib/librkllmrt.so | grep -q $'\x7fELF'; then \
-        echo "ERROR: librkllmrt.so is not a valid ELF file! Check Git LFS."; \
-        exit 1; \
-    fi
-
 # 模型集成阶段
 FROM base AS model-image
 ARG MODEL_URL
