@@ -26,31 +26,33 @@ jobs:
       fail-fast: false # 即使其中一个模型构建失败，其他模型也继续构建
       matrix:
         include:
-          - alias: deepseek-r1-distill-qwen-1.5b-fp16-rk3576
-            file: DeepSeek-R1-Distill-Qwen-1.5B_FP16_RK3576.rkllm
-            url: https://huggingface.co/JiahaoLi/DeepSeek-R1-Distill-Qwen-RK3576/resolve/main/DeepSeek-R1-Distill-Qwen-1.5B_W4A16_G128_RK3576.rkllm
+          - alias: "1.5b-fp16"
+            file: "DeepSeek-R1-Distill-Qwen-1.5B_FP16_RK3576.rkllm"
+            url: "https://huggingface.co/JiahaoLi/DeepSeek-R1-Distill-Qwen-RK3576/resolve/main/DeepSeek-R1-Distill-Qwen-1.5B_FP16_RK3576.rkllm"
           
-          - alias: deepseek-r1-distill-qwen-1.5b-w4a16-rk3576
-            file: DeepSeek-R1-Distill-Qwen-1.5B_W4A16_RK3576.rkllm
-            url: https://huggingface.co/JiahaoLi/DeepSeek-R1-Distill-Qwen-RK3576/resolve/main/DeepSeek-R1-Distill-Qwen-1.5B_W4A16_RK3576.rkllm
+          - alias: "1.5b-w4a16"
+            file: "DeepSeek-R1-Distill-Qwen-1.5B_W4A16_RK3576.rkllm"
+            url: "https://huggingface.co/JiahaoLi/DeepSeek-R1-Distill-Qwen-RK3576/resolve/main/DeepSeek-R1-Distill-Qwen-1.5B_W4A16_RK3576.rkllm"
 
-          - alias: DeepSeek-R1-Distill-Qwen-1.5B_W4A16_G128_RK3576
-            file: DeepSeek-R1-Distill-Qwen-1.5B_W4A16_G128_RK3576.rkllm
-            url: https://huggingface.co/JiahaoLi/DeepSeek-R1-Distill-Qwen-RK3576/resolve/main/DeepSeek-R1-Distill-Qwen-1.5B_W4A16_G128_RK3576.rkllm
+          - alias: "1.5b-w4a16-g128"
+            file: "DeepSeek-R1-Distill-Qwen-1.5B_W4A16_G128_RK3576.rkllm"
+            url: "https://huggingface.co/JiahaoLi/DeepSeek-R1-Distill-Qwen-RK3576/resolve/main/DeepSeek-R1-Distill-Qwen-1.5B_W4A16_G128_RK3576.rkllm"
           
-          - alias: deepseek-r1-distill-qwen-7b-w4a16-rk3576
-            file: DeepSeek-R1-Distill-Qwen-7B_W4A16_RK3576.rkllm
-            url: https://huggingface.co/JiahaoLi/DeepSeek-R1-Distill-Qwen-RK3576/resolve/main/DeepSeek-R1-Distill-Qwen-7B_W4A16_RK3576.rkllm
+          - alias: "7b-w4a16"
+            file: "DeepSeek-R1-Distill-Qwen-7B_W4A16_RK3576.rkllm"
+            url: "https://huggingface.co/JiahaoLi/DeepSeek-R1-Distill-Qwen-RK3576/resolve/main/DeepSeek-R1-Distill-Qwen-7B_W4A16_RK3576.rkllm"
           
-          - alias: deepseek-r1-distill-qwen-7b-w4a16-g128-rk3576
-            file: DeepSeek-R1-Distill-Qwen-7B_W4A16_G128_RK3576.rkllm
-            url: https://huggingface.co/JiahaoLi/DeepSeek-R1-Distill-Qwen-RK3576/resolve/main/DeepSeek-R1-Distill-Qwen-7B_W4A16_G128_RK3576.rkllm
+          - alias: "7b-w4a16-g128"
+            file: "DeepSeek-R1-Distill-Qwen-7B_W4A16_G128_RK3576.rkllm"
+            url: "https://huggingface.co/JiahaoLi/DeepSeek-R1-Distill-Qwen-RK3576/resolve/main/DeepSeek-R1-Distill-Qwen-7B_W4A16_G128_RK3576.rkllm"
 
     steps:
       - name: Checkout repository
         uses: actions/checkout@v4
+        with:
+          lfs: true # 【重要修复】确保拉取真实的动态链接库而非 LFS 指针
 
-      # 1. 清理磁盘空间 (非常重要，否则下载 7B 模型会报错)
+      # 1. 清理磁盘空间 (针对 7B 模型构建)
       - name: Free Disk Space
         uses: jlumbroso/free-disk-space@main
         with:
@@ -86,7 +88,7 @@ jobs:
           # --- 核心修改：移除 ${{ matrix.alias }}，所有镜像共用一个仓库名 ---
           images: ${{ env.REGISTRY }}/${{ env.IMAGE_BASE_NAME }}
           # -----------------------------------------------------------
-          # --- 核心修改：将模型描述作为 Tag 的前缀 ---
+          # --- 核心修改：将别名作为 Tag ---
           tags: |
             type=raw,value=${{ matrix.alias }}-latest
             type=raw,value=${{ matrix.alias }}-${{ github.sha }}
@@ -97,13 +99,10 @@ jobs:
         with:
           context: .
           file: ./docker/RK3576/LLM/DeepSeek-R1-Distill-Qwen.dockerfile
-          # --- 核心修复 ---
-          # 必须对应 Dockerfile 中的 "FROM base AS model-image"
           target: model-image 
-          # --------------
           push: true
           platforms: linux/arm64
-          provenance: false
+          provenance: false # 消除 unknown/unknown 镜像
           build-args: |
             MODEL_URL=${{ matrix.url }}
             MODEL_FILE=${{ matrix.file }}
