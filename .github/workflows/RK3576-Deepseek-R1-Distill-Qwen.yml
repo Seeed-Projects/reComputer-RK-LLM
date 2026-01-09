@@ -4,15 +4,13 @@ on:
   push:
     branches: [ main, master ]
     paths:
-      - 'src/**'  
+      - 'src/**'
       - 'docker/RK3576/LLM/DeepSeek-R1-Distill-Qwen.dockerfile'
       - '.github/workflows/RK3576-Deepseek-R1-Distill-Qwen.yml'
   workflow_dispatch:
 
 env:
   REGISTRY: ghcr.io
-  # 【核心修改】直接指定 Package 名称，不再使用 github.repository (避免带上用户名/仓库名这种结构)
-  # 最终镜像路径会是: ghcr.io/lj-hao/RK3576-Deepseek-R1-Distill-Qwen
   IMAGE_BASE_NAME: ${{ github.repository_owner }}/RK3576-Deepseek-R1-Distill-Qwen
 
 jobs:
@@ -52,7 +50,6 @@ jobs:
         with:
           lfs: true
 
-      # 强制拉取 LFS，防止 .so 文件失效
       - name: Force LFS Pull
         run: |
           git lfs install
@@ -87,7 +84,6 @@ jobs:
         uses: docker/metadata-action@v5
         with:
           images: ${{ env.REGISTRY }}/${{ env.IMAGE_BASE_NAME }}
-          # 【核心修改】生成的标签将只包含 1.5b-w4a16-latest 等
           tags: |
             type=raw,value=${{ matrix.alias }}-latest
 
@@ -96,7 +92,7 @@ jobs:
         with:
           context: .
           file: ./docker/RK3576/LLM/DeepSeek-R1-Distill-Qwen.dockerfile
-          target: model-image 
+          # 重要：不指定 target，确保所有指令被执行
           push: true
           platforms: linux/arm64
           provenance: false
