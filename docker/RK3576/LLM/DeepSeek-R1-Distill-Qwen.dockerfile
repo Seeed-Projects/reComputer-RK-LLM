@@ -9,7 +9,7 @@ WORKDIR /app
 RUN mkdir -p /app/models
 
 # 安装依赖
-COPY ./src/flask_server_requirements_llm.txt /app/requirements.txt
+COPY ./src/fastapi_server_requirements_llm.txt /app/requirements.txt
 RUN pip install --no-cache-dir -r /app/requirements.txt
 
 # 拷贝运行时库和工具
@@ -27,11 +27,11 @@ RUN if [ -n "${MODEL_URL}" ]; then \
     wget --progress=dot:giga "${MODEL_URL}" -O "/app/models/${MODEL_FILE}"; \
     fi
 
-COPY ./src/flask_server_llm.py /app/
+COPY ./src/fastapi_server_llm.py /app/
 
 # 将 ARG 转为 ENV，这样 CMD 才能读取到
 ENV RKLLM_MODEL_PATH=/app/models/${MODEL_FILE}
 
 EXPOSE 8080
 
-CMD ["sh", "-c", "python3 /app/flask_server_llm.py --rkllm_model_path ${RKLLM_MODEL_PATH} --target_platform rk3576"]
+CMD ["sh", "-c", "python3 /app/fastapi_server_llm.py --rkllm_model_path ${RKLLM_MODEL_PATH} --target_platform rk3576"]
