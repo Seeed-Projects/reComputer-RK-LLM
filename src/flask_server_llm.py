@@ -1,25 +1,32 @@
 import ctypes
+import sys
 import os
 import threading
 import time
 import argparse
+from flask import Flask, request, jsonify, Response
 import json
-import asyncio
-from typing import List, Optional, Union, Dict, Any
-from fastapi import FastAPI, HTTPException, Request
-from fastapi.responses import StreamingResponse
-from pydantic import BaseModel, Field
-import uvicorn
 
-# --- RKLLM C-Types 定义 (保留原逻辑) ---
+app = Flask(__name__)
+
+# 设置动态库路径
 rkllm_lib = ctypes.CDLL('/usr/lib/librkllmrt.so')
-RKLLM_Handle_t = ctypes.c_void_p
 
-class LLMCallState:
-    RKLLM_RUN_NORMAL = 0
-    RKLLM_RUN_WAITING = 1
-    RKLLM_RUN_FINISH = 2
-    RKLLM_RUN_ERROR = 3
+# 定义结构体
+RKLLM_Handle_t = ctypes.c_void_p
+userdata = ctypes.c_void_p(None)
+
+LLMCallState = ctypes.c_int
+LLMCallState.RKLLM_RUN_NORMAL  = 0
+LLMCallState.RKLLM_RUN_WAITING  = 1
+LLMCallState.RKLLM_RUN_FINISH  = 2
+LLMCallState.RKLLM_RUN_ERROR   = 3
+
+RKLLMInputType = ctypes.c_int
+RKLLMInputType.RKLLM_INPUT_PROMPT      = 0
+
+RKLLMInferMode = ctypes.c_int
+RKLLMInferMode.RKLLM_INFER_GENERATE = 0
 
 class RKLLMExtendParam(ctypes.Structure):
     _fields_ = [
@@ -34,198 +41,293 @@ class RKLLMExtendParam(ctypes.Structure):
 
 class RKLLMParam(ctypes.Structure):
     _fields_ = [
-        ("model_path", ctypes.c_char_p), ("max_context_len", ctypes.c_int32),
-        ("max_new_tokens", ctypes.c_int32), ("top_k", ctypes.c_int32),
-        ("n_keep", ctypes.c_int32), ("top_p", ctypes.c_float),
-        ("temperature", ctypes.c_float), ("repeat_penalty", ctypes.c_float),
-        ("frequency_penalty", ctypes.c_float), ("presence_penalty", ctypes.c_float),
-        ("mirostat", ctypes.c_int32), ("mirostat_tau", ctypes.c_float),
-        ("mirostat_eta", ctypes.c_float), ("skip_special_token", ctypes.c_bool),
-        ("is_async", ctypes.c_bool), ("img_start", ctypes.c_char_p),
-        ("img_end", ctypes.c_char_p), ("img_content", ctypes.c_char_p),
+        ("model_path", ctypes.c_char_p),
+        ("max_context_len", ctypes.c_int32),
+        ("max_new_tokens", ctypes.c_int32),
+        ("top_k", ctypes.c_int32),
+        ("n_keep", ctypes.c_int32),
+        ("top_p", ctypes.c_float),
+        ("temperature", ctypes.c_float),
+        ("repeat_penalty", ctypes.c_float),
+        ("frequency_penalty", ctypes.c_float),
+        ("presence_penalty", ctypes.c_float),
+        ("mirostat", ctypes.c_int32),
+        ("mirostat_tau", ctypes.c_float),
+        ("mirostat_eta", ctypes.c_float),
+        ("skip_special_token", ctypes.c_bool),
+        ("is_async", ctypes.c_bool),
+        ("img_start", ctypes.c_char_p),
+        ("img_end", ctypes.c_char_p),
+        ("img_content", ctypes.c_char_p),
         ("extend_param", RKLLMExtendParam),
     ]
 
 class RKLLMInputUnion(ctypes.Union):
-    _fields_ = [("prompt_input", ctypes.c_char_p)]
+    _fields_ = [
+        ("prompt_input", ctypes.c_char_p),
+    ]
 
 class RKLLMInput(ctypes.Structure):
     _fields_ = [
-        ("role", ctypes.c_char_p), ("enable_thinking", ctypes.c_bool),
-        ("input_type", ctypes.c_int), ("input_data", RKLLMInputUnion)
+        ("role", ctypes.c_char_p),
+        ("enable_thinking", ctypes.c_bool),
+        ("input_type", RKLLMInputType),
+        ("input_data", RKLLMInputUnion)
     ]
 
 class RKLLMInferParam(ctypes.Structure):
     _fields_ = [
-        ("mode", ctypes.c_int), ("lora_params", ctypes.c_void_p),
-        ("prompt_cache_params", ctypes.c_void_p), ("keep_history", ctypes.c_int)
+        ("mode", RKLLMInferMode),
+        ("lora_params", ctypes.c_void_p),
+        ("prompt_cache_params", ctypes.c_void_p),
+        ("keep_history", ctypes.c_int)
     ]
 
 class RKLLMResult(ctypes.Structure):
-    _fields_ = [("text", ctypes.c_char_p), ("token_id", ctypes.c_int)]
+    _fields_ = [
+        ("text", ctypes.c_char_p),
+        ("token_id", ctypes.c_int),
+    ]
 
-# --- OpenAI 协议模型 ---
-class ChatMessage(BaseModel):
-    role: str
-    content: str
+# 锁和状态变量
+lock = threading.Lock()
+is_blocking = False
 
-class ChatCompletionRequest(BaseModel):
-    model: str = "rkllm-model"
-    messages: List[ChatMessage]
-    stream: Optional[bool] = False
-    temperature: Optional[float] = 0.8
-    top_p: Optional[float] = 0.9
-    max_tokens: Optional[int] = 4096
-
-# --- 全局状态管理 ---
-global_text_queue = []
+# 回调函数输出
+global_text = []
 global_state = -1
-model_lock = threading.Lock()
 
+# 回调函数
 def callback_impl(result, userdata, state):
-    global global_state
-    global_state = state
-    if state == LLMCallState.RKLLM_RUN_NORMAL and result.contents.text:
-        text = result.contents.text.decode('utf-8')
-        global_text_queue.append(text)
+    global global_text, global_state
+    if state == LLMCallState.RKLLM_RUN_FINISH:
+        global_state = state
+        print("\n")
+        sys.stdout.flush()
+    elif state == LLMCallState.RKLLM_RUN_ERROR:
+        global_state = state
+        print("run error")
+        sys.stdout.flush()
+    elif state == LLMCallState.RKLLM_RUN_NORMAL:
+        global_state = state
+        if result.contents.text:
+            global_text.append(result.contents.text.decode('utf-8'))
     return 0
 
-CALLBACK_TYPE = ctypes.CFUNCTYPE(ctypes.c_int, ctypes.POINTER(RKLLMResult), ctypes.c_void_p, ctypes.c_int)
-c_callback = CALLBACK_TYPE(callback_impl)
+callback_type = ctypes.CFUNCTYPE(ctypes.c_int, ctypes.POINTER(RKLLMResult), ctypes.c_void_p, ctypes.c_int)
+callback = callback_type(callback_impl)
 
-class RKLLM:
-    def __init__(self, model_path, platform):
-        param = RKLLMParam()
-        param.model_path = bytes(model_path, 'utf-8')
-        param.max_context_len = 4096
-        param.max_new_tokens = 4096
-        param.top_k = 1
-        param.top_p = 0.9
-        param.temperature = 0.8
-        param.repeat_penalty = 1.1
-        param.is_async = False
-        param.extend_param.n_batch = 1
-        param.extend_param.enabled_cpus_num = 4
+# RKLLM 类
+class RKLLM(object):
+    def __init__(self, model_path, platform="rk3588"):
+        # 初始化 RKLLMParam
+        rkllm_param = RKLLMParam()
+        rkllm_param.model_path = bytes(model_path, 'utf-8')
+        rkllm_param.max_context_len = 4096
+        rkllm_param.max_new_tokens = 4096
+        rkllm_param.n_keep = 0
+        rkllm_param.top_k = 1
+        rkllm_param.top_p = 0.9
+        rkllm_param.temperature = 0.8
+        rkllm_param.repeat_penalty = 1.1
+        rkllm_param.frequency_penalty = 0.0
+        rkllm_param.presence_penalty = 0.0
+        rkllm_param.mirostat = 0
+        rkllm_param.mirostat_tau = 5.0
+        rkllm_param.mirostat_eta = 0.1
+        rkllm_param.skip_special_token = True
+        rkllm_param.is_async = False
+        rkllm_param.img_start = "".encode('utf-8')
+        rkllm_param.img_end = "".encode('utf-8')
+        rkllm_param.img_content = "".encode('utf-8')
         
-        if platform in ["rk3588", "rk3576"]:
-            param.extend_param.enabled_cpus_mask = (1 << 4) | (1 << 5) | (1 << 6) | (1 << 7)
+        # 设置 extend_param
+        rkllm_param.extend_param.base_domain_id = 0
+        rkllm_param.extend_param.embed_flash = 1
+        rkllm_param.extend_param.n_batch = 1  # 关键修复：正确设置 n_batch
+        rkllm_param.extend_param.use_cross_attn = 0
+        rkllm_param.extend_param.enabled_cpus_num = 4
         
+        # 根据平台设置 CPU 掩码
+        if platform.lower() in ["rk3576", "rk3588"]:
+            rkllm_param.extend_param.enabled_cpus_mask = (1 << 4) | (1 << 5) | (1 << 6) | (1 << 7)
+        else:
+            rkllm_param.extend_param.enabled_cpus_mask = (1 << 0) | (1 << 1) | (1 << 2) | (1 << 3)
+
         self.handle = RKLLM_Handle_t()
-        rkllm_lib.rkllm_init.argtypes = [ctypes.POINTER(RKLLM_Handle_t), ctypes.POINTER(RKLLMParam), CALLBACK_TYPE]
-        ret = rkllm_lib.rkllm_init(ctypes.byref(self.handle), ctypes.byref(param), c_callback)
-        if ret != 0: raise RuntimeError("RKLLM Init Failed")
 
-    def run(self, prompt):
-        in_param = RKLLMInput()
-        in_param.role = b"user"
-        in_param.input_type = 0
-        in_param.input_data.prompt_input = ctypes.c_char_p(prompt.encode('utf-8'))
+        # 初始化函数
+        self.rkllm_init = rkllm_lib.rkllm_init
+        self.rkllm_init.argtypes = [ctypes.POINTER(RKLLM_Handle_t), ctypes.POINTER(RKLLMParam), callback_type]
+        self.rkllm_init.restype = ctypes.c_int
+        
+        ret = self.rkllm_init(ctypes.byref(self.handle), ctypes.byref(rkllm_param), callback)
+        if ret != 0:
+            print("rkllm init failed")
+            sys.exit(1)
+        else:
+            print("rkllm init success!")
+
+        # 运行函数
+        self.rkllm_run = rkllm_lib.rkllm_run
+        self.rkllm_run.argtypes = [RKLLM_Handle_t, ctypes.POINTER(RKLLMInput), ctypes.POINTER(RKLLMInferParam), ctypes.c_void_p]
+        self.rkllm_run.restype = ctypes.c_int
+        
+        # 销毁函数
+        self.rkllm_destroy = rkllm_lib.rkllm_destroy
+        self.rkllm_destroy.argtypes = [RKLLM_Handle_t]
+        self.rkllm_destroy.restype = ctypes.c_int
+
+    def run(self, prompt, role="user"):
+        rkllm_input = RKLLMInput()
+        rkllm_input.role = role.encode('utf-8')
+        rkllm_input.enable_thinking = False
+        rkllm_input.input_type = RKLLMInputType.RKLLM_INPUT_PROMPT
+        rkllm_input.input_data.prompt_input = ctypes.c_char_p(prompt.encode('utf-8'))
         
         infer_param = RKLLMInferParam()
-        infer_param.mode = 0
+        infer_param.mode = RKLLMInferMode.RKLLM_INFER_GENERATE
+        infer_param.lora_params = None
+        infer_param.prompt_cache_params = None
         infer_param.keep_history = 0
         
-        rkllm_lib.rkllm_run(self.handle, ctypes.byref(in_param), ctypes.byref(infer_param), None)
+        return self.rkllm_run(self.handle, ctypes.byref(rkllm_input), ctypes.byref(infer_param), None)
+    
+    def release(self):
+        self.rkllm_destroy(self.handle)
 
-# --- FastAPI 核心逻辑 ---
-app = FastAPI(title="RKLLM OpenAI API")
-rkllm_instance: RKLLM = None
-
-def format_prompt(messages: List[ChatMessage]) -> str:
-    prompt = ""
-    for msg in messages:
-        if msg.role == "system": prompt += f"{msg.content}\n\n"
-        elif msg.role == "user": prompt += f"User: {msg.content}\n"
-        elif msg.role == "assistant": prompt += f"Assistant: {msg.content}\n"
-    return prompt + "Assistant: "
-
-async def stream_generator(prompt: str):
-    global global_text_queue, global_state
+# Flask 路由
+@app.route('/v1/chat/completions', methods=['POST'])
+def chat_completions():
+    global global_text, global_state, is_blocking
     
-    # 在线程池中运行推理以避免阻塞事件循环
-    loop = asyncio.get_event_loop()
-    inference_task = loop.run_in_executor(None, rkllm_instance.run, prompt)
+    if is_blocking:
+        return jsonify({'error': {'message': 'Server is busy', 'type': 'server_error'}}), 503
     
-    created_time = int(time.time())
-    
-    while not inference_task.done() or global_text_queue:
-        if global_text_queue:
-            content = global_text_queue.pop(0)
-            chunk = {
-                "id": "chatcmpl-rkllm",
-                "object": "chat.completion.chunk",
-                "created": created_time,
-                "model": "rkllm",
-                "choices": [{"index": 0, "delta": {"content": content}, "finish_reason": None}]
-            }
-            yield f"data: {json.dumps(chunk, ensure_ascii=False)}\n\n"
-        else:
-            await asyncio.sleep(0.01) # 极短等待，释放控制权
-            
-    # 结束标记
-    yield f"data: {json.dumps({'id':'chatcmpl-rkllm','object':'chat.completion.chunk','created':created_time,'model':'rkllm','choices':[{'index':0,'delta':{},'finish_reason':'stop'}]})}\n\n"
-    yield "data: [DONE]\n\n"
-
-@app.post("/v1/chat/completions")
-async def chat_completions(request: ChatCompletionRequest):
-    global global_text_queue, global_state
-    
-    if not model_lock.acquire(blocking=False):
-        raise HTTPException(status_code=503, detail="Server Busy")
-    
+    lock.acquire()
     try:
-        global_text_queue.clear()
-        global_state = -1
-        prompt = format_prompt(request.messages)
+        is_blocking = True
         
-        if request.stream:
-            return StreamingResponse(
-                stream_generator(prompt), 
-                media_type="text/event-stream"
-            )
-        else:
-            # 非流式处理
-            loop = asyncio.get_event_loop()
-            await loop.run_in_executor(None, rkllm_instance.run, prompt)
+        data = request.json
+        if not data or 'messages' not in data:
+            return jsonify({'error': {'message': 'Invalid request', 'type': 'invalid_request'}}), 400
+        
+        messages = data['messages']
+        stream = data.get('stream', False)
+        
+        # 重置全局变量
+        global_text = []
+        global_state = -1
+        
+        # 构建提示词
+        prompt = ""
+        for msg in messages:
+            if msg['role'] == 'system':
+                prompt += f"{msg['content']}\n\n"
+            elif msg['role'] == 'user':
+                prompt += f"User: {msg['content']}\n"
+            elif msg['role'] == 'assistant':
+                prompt += f"Assistant: {msg['content']}\n"
+        
+        # 添加最后的 Assistant: 提示
+        if prompt and not prompt.endswith("Assistant: "):
+            prompt += "Assistant: "
+        
+        print(f"Prompt: {prompt}")
+        
+        def generate_response():
+            nonlocal prompt
             
-            while global_state not in [LLMCallState.RKLLM_RUN_FINISH, LLMCallState.RKLLM_RUN_ERROR]:
-                await asyncio.sleep(0.05)
+            # 运行模型
+            model_thread = threading.Thread(target=rkllm_model.run, args=(prompt,))
+            model_thread.start()
+            
+            if stream:
+                # 流式响应 - 直接返回纯文本
+                model_thread_finished = False
+                while not model_thread_finished:
+                    if global_text:
+                        chunk = global_text.pop(0)
+                        yield chunk  # 直接返回文本内容，不包装为JSON
+                    
+                    model_thread.join(timeout=0.01)
+                    model_thread_finished = not model_thread.is_alive()
+                    
+                    if global_state == LLMCallState.RKLLM_RUN_FINISH:
+                        break
                 
-            full_content = "".join(global_text_queue)
-            global_text_queue.clear()
-            
-            return {
-                "id": "chatcmpl-rkllm",
-                "object": "chat.completion",
-                "created": int(time.time()),
-                "model": "rkllm",
-                "choices": [{
-                    "index": 0,
-                    "message": {"role": "assistant", "content": full_content},
-                    "finish_reason": "stop"
-                }],
-                "usage": {"prompt_tokens": 0, "completion_tokens": 0, "total_tokens": 0}
-            }
-    finally:
-        # 注意：对于流式，锁的释放需要特殊处理，这里为了简化在同步调用后释放
-        # 实际生产中建议使用 Semaphore 配合 FastAPI 依赖注入
-        if not request.stream:
-            model_lock.release()
+                # 添加结束标记
+                yield "[DONE]"
+            else:
+                # 非流式响应 - 返回JSON
+                model_thread_finished = False
+                full_response = ""
+                while not model_thread_finished:
+                    while global_text:
+                        full_response += global_text.pop(0)
+                    
+                    model_thread.join(timeout=0.01)
+                    model_thread_finished = not model_thread.is_alive()
+                    
+                    if global_state == LLMCallState.RKLLM_RUN_FINISH:
+                        break
+                
+                response = {
+                    "id": "chatcmpl-123",
+                    "object": "chat.completion",
+                    "created": int(time.time()),
+                    "model": "rkllm-model",
+                    "choices": [{
+                        "index": 0,
+                        "message": {
+                            "role": "assistant",
+                            "content": full_response
+                        },
+                        "finish_reason": "stop"
+                    }],
+                    "usage": {
+                        "prompt_tokens": 0,
+                        "completion_tokens": 0,
+                        "total_tokens": 0
+                    }
+                }
+                return json.dumps(response, ensure_ascii=False)
+        
+        if stream:
+            # 对于流式响应，返回纯文本流
+            return Response(generate_response(), content_type='text/plain; charset=utf-8')
         else:
-            # 流式情况下，在生成器结束后释放锁的操作通常放在后台任务或回调中
-            # 此处简单起见，建议流式客户端完成读取
-            def release_lock_later():
-                time.sleep(1) # 给生成器一点时间启动
-                model_lock.release()
-            # 注意：严谨方案是包装 StreamingResponse 在其 on_event("shutdown") 释放
-            model_lock.release() 
+            # 对于非流式响应，返回JSON
+            response_data = generate_response()
+            return Response(response_data, content_type='application/json; charset=utf-8')
+            
+    finally:
+        lock.release()
+        is_blocking = False
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser()
-    parser.add_argument('--model_path', type=str, required=True)
-    parser.add_argument('--platform', type=str, default="rk3588")
-    parser.add_argument('--port', type=int, default=8000)
+    parser.add_argument('--rkllm_model_path', type=str, required=True, 
+                       help='Absolute path of the converted RKLLM model')
+    parser.add_argument('--target_platform', type=str, required=True,
+                       help='Target platform: e.g., rk3588/rk3576')
+    parser.add_argument('--port', type=int, default=8080,
+                       help='Port to run the server on')
     args = parser.parse_args()
 
-    rkllm_instance = RKLLM(args.model_path, args.platform)
-    uvicorn.run(app, host="0.0.0.0", port=args.port)
+    if not os.path.exists(args.rkllm_model_path):
+        print(f"Error: Model path does not exist: {args.rkllm_model_path}")
+        sys.exit(1)
+
+    # 初始化模型
+    print("Initializing RKLLM model...")
+    rkllm_model = RKLLM(args.rkllm_model_path, args.target_platform)
+    print("Model initialized successfully!")
+    
+    # 启动服务器
+    print(f"Starting server on port {args.port}...")
+    app.run(host='0.0.0.0', port=args.port, threaded=True, debug=False)
+    
+    # 清理
+    rkllm_model.release()
+    print("Server stopped.")
