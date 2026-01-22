@@ -1,3 +1,9 @@
+# Install Docker
+
+```bash
+curl -fsSL https://get.docker.com -o get-docker.sh && sudo sh get-docker.sh 
+```
+
 # Start inference
 
 ## For RK3588
@@ -49,7 +55,7 @@ curl -N http://127.0.0.1:8080/v1/chat/completions \
   }'
 ```
 
-# Use OpenAI API to test
+# Use OpenAI API
 
 ## Non-streaming response：
 
@@ -108,6 +114,7 @@ for chunk in response_stream:
 # Speed test
 
 > Note: A rough estimate of a model's inference speed includes both TTFT and TPOT.
+> Note: You can use `python test_inference_speed.py --help` to view the help function.
 
 ```bash
 python -m venv .env && source .env/bin/activate
@@ -115,4 +122,3 @@ pip install requests
 python test_inference_speed.py
 ```
 
-> Note: You can use `python test_inference_speed.py --help` to view the help function.
