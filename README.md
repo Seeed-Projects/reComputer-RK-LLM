@@ -48,7 +48,7 @@ curl -N http://127.0.0.1:8080/v1/chat/completions \
     "messages": [
       {"role": "user", "content": "Where is the capital of China？"}
     ],
-    "temperature": 2,
+    "temperature": 1,
     "max_tokens": 512,
     "top_k": 1,
     "stream": true
