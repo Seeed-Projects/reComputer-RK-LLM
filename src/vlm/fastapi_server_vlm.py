@@ -1,8 +1,7 @@
 #!/usr/bin/env python3
 """
 FastAPI Server for RKLLM Vision Language Model Service
-Provides OpenAI-compatible API for multimodal inference on RK3588 platform
-Supports complete OpenAI API parameters including temperature, top_p, max_tokens, etc.
+OpenAI-compatible API for multimodal inference on RK3588 platform
 """
 
 import ctypes
@@ -11,18 +10,18 @@ import sys
 import time
 import uuid
 import json
-import asyncio
 import logging
+import asyncio
 import threading
 import argparse
+from queue import Queue
 from contextlib import asynccontextmanager
 from concurrent.futures import ThreadPoolExecutor
 from typing import List, Optional, Dict, Any, Union, Generator
-from datetime import datetime
 from pathlib import Path
 
 import uvicorn
-from fastapi import FastAPI, HTTPException, Request
+from fastapi import FastAPI, HTTPException
 from fastapi.responses import StreamingResponse, JSONResponse
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel, Field
@@ -34,15 +33,14 @@ def preload_libraries():
         # Set environment variables
         os.environ['LD_PRELOAD'] = '/usr/lib/aarch64-linux-gnu/libmali.so.1:' + os.environ.get('LD_PRELOAD', '')
         os.environ['LD_LIBRARY_PATH'] = '/usr/lib/aarch64-linux-gnu:/usr/lib:' + os.environ.get('LD_LIBRARY_PATH', '')
-        
+
         # Preload libraries
         libs = [
             'libmali.so.1',
             'libOpenCL.so',
             'librknnrt.so',
-            '/usr/lib/librkllmrt.so'
         ]
-        
+
         for lib in libs:
             try:
                 ctypes.CDLL(lib, mode=ctypes.RTLD_GLOBAL)
@@ -56,286 +54,437 @@ print("Preloading system libraries...")
 preload_libraries()
 
 # ==================== RKLLM Service Wrapper ====================
+
 class RKLLMService:
-    """Wrapper for RKLLM Vision Language Model service"""
+    """Unified wrapper for RKLLM Vision Language Model service"""
     
     def __init__(self, library_path: str = "/usr/lib/librkllm_service.so"):
-        """
-        Initialize RKLLM service wrapper.
-        
-        Args:
-            library_path: Path to the shared library
-        """
         try:
+            # Load RKLLM service library
             self.lib = ctypes.CDLL(library_path, mode=ctypes.RTLD_GLOBAL)
-            print(f"✓ Successfully loaded {library_path}")
+            self._setup_function_signatures()
+            
         except Exception as e:
-            print(f"✗ Failed to load {library_path}: {e}")
-            print("Please ensure RKLLM service library is built and available")
-            sys.exit(1)
+            raise RuntimeError(f"Failed to load {library_path}: {e}")
         
-        # Define function signatures
+        self.ctx = None
+        self.lock = threading.Lock()
+        self.initialized = False
+        self.encoder_model_path = None
+        self.llm_model_path = None
+        
+        # 用于管理流式回调的队列
+        self._callback_queues = {}
+        self._callback_counter = 0
+        
+    def _setup_function_signatures(self):
+        """Setup C function signatures"""
+        # Basic service functions
         self.lib.create_service.restype = ctypes.c_void_p
         self.lib.create_service.argtypes = []
         
-        self.lib.initialize_service.restype = ctypes.c_int
-        self.lib.initialize_service.argtypes = [
-            ctypes.c_void_p,  # ctx
-            ctypes.c_char_p,  # image_path
-            ctypes.c_char_p,  # encoder_model_path
-            ctypes.c_char_p,  # llm_model_path
-            ctypes.c_int,     # max_new_tokens
-            ctypes.c_int,     # max_context_len
-            ctypes.c_int,     # rknn_core_num
-            ctypes.c_char_p,  # img_start
-            ctypes.c_char_p,  # img_end
-            ctypes.c_char_p,  # img_content
+        # Initialize without image
+        self.lib.initialize_service_without_image.restype = ctypes.c_int
+        self.lib.initialize_service_without_image.argtypes = [
+            ctypes.c_void_p, ctypes.c_char_p, ctypes.c_char_p, ctypes.c_int,
+            ctypes.c_int, ctypes.c_int, ctypes.c_char_p, ctypes.c_char_p, ctypes.c_char_p
         ]
         
-        self.lib.generate_response.restype = ctypes.c_char_p
-        self.lib.generate_response.argtypes = [
-            ctypes.c_void_p,  # ctx
-            ctypes.c_char_p,  # prompt
-        ]
-
+        # Generate response functions
         self.lib.generate_response_with_params.restype = ctypes.c_char_p
         self.lib.generate_response_with_params.argtypes = [
+            ctypes.c_void_p, ctypes.c_char_p, ctypes.c_int, ctypes.c_float, ctypes.c_float
+        ]
+        
+        # Dynamic image generation
+        self.lib.generate_response_with_dynamic_image.restype = ctypes.c_char_p
+        self.lib.generate_response_with_dynamic_image.argtypes = [
+            ctypes.c_void_p, ctypes.c_char_p, ctypes.c_size_t, ctypes.c_char_p,
+            ctypes.c_int, ctypes.c_float, ctypes.c_float
+        ]
+
+        # Define streaming callback function type
+        self.streaming_callback_type = ctypes.CFUNCTYPE(
+            ctypes.c_int,  # return type
+            ctypes.c_char_p,  # token
+            ctypes.c_void_p  # userdata
+        )
+
+        # Streaming functions with dynamic image
+        self.lib.generate_streaming_with_dynamic_image.restype = ctypes.c_int
+        self.lib.generate_streaming_with_dynamic_image.argtypes = [
+            ctypes.c_void_p,  # ctx
+            ctypes.c_char_p,  # image_data_b64
+            ctypes.c_size_t,  # image_size
+            ctypes.c_char_p,  # prompt
+            ctypes.c_int,     # top_k
+            ctypes.c_float,   # top_p
+            ctypes.c_float,   # temperature
+            self.streaming_callback_type,  # callback
+            ctypes.c_void_p   # userdata
+        ]
+
+        # Streaming functions without image
+        self.lib.generate_streaming.restype = ctypes.c_int
+        self.lib.generate_streaming.argtypes = [
             ctypes.c_void_p,  # ctx
             ctypes.c_char_p,  # prompt
             ctypes.c_int,     # top_k
             ctypes.c_float,   # top_p
             ctypes.c_float,   # temperature
+            self.streaming_callback_type,  # callback
+            ctypes.c_void_p   # userdata
         ]
 
-        self.lib.cleanup_service.argtypes = [ctypes.c_void_p]
-        self.lib.destroy_service.argtypes = [ctypes.c_void_p]
-
-        self.lib.simple_inference.restype = ctypes.c_char_p
-        self.lib.simple_inference.argtypes = [
-            ctypes.c_char_p,  # image_path
-            ctypes.c_char_p,  # encoder_model_path
-            ctypes.c_char_p,  # llm_model_path
-            ctypes.c_char_p,  # prompt
-            ctypes.c_int,     # max_new_tokens
-            ctypes.c_int,     # max_context_len
-            ctypes.c_int,     # rknn_core_num
-        ]
-
-        # Add function signatures for runtime parameter updates
-        self.lib.update_runtime_params.restype = ctypes.c_int
+        # Runtime parameter functions
         self.lib.update_runtime_params.argtypes = [
-            ctypes.c_void_p,  # ctx
-            ctypes.c_int,     # max_new_tokens
-            ctypes.c_int,     # max_context_len
-            ctypes.c_int,     # rknn_core_num
+            ctypes.c_void_p, ctypes.c_int, ctypes.c_int, ctypes.c_int
         ]
+        self.lib.update_runtime_params.restype = ctypes.c_int
 
         self.lib.get_runtime_params.argtypes = [
-            ctypes.c_void_p,  # ctx
-            ctypes.POINTER(ctypes.c_int),  # max_new_tokens
-            ctypes.POINTER(ctypes.c_int),  # max_context_len
-            ctypes.POINTER(ctypes.c_int),  # rknn_core_num
+            ctypes.c_void_p, ctypes.POINTER(ctypes.c_int),
+            ctypes.POINTER(ctypes.c_int), ctypes.POINTER(ctypes.c_int)
         ]
+        self.lib.get_runtime_params.restype = None
 
-        self.ctx = None
-        self.lock = threading.Lock()
-        
-    def initialize(self, 
-                   image_path: str,
-                   encoder_model_path: str,
-                   llm_model_path: str,
-                   max_new_tokens: int = 128,
-                   max_context_len: int = 2048,
-                   rknn_core_num: int = 1,
-                   img_start: Optional[str] = None,
-                   img_end: Optional[str] = None,
-                   img_content: Optional[str] = None) -> bool:
-        """
-        Initialize the service with models.
-        """
+        # Cleanup
+        self.lib.cleanup_service.argtypes = [ctypes.c_void_p]
+        self.lib.destroy_service.argtypes = [ctypes.c_void_p]
+    
+    def initialize_without_image(self,
+                               encoder_model_path: str,
+                               llm_model_path: str,
+                               max_new_tokens: int = 128,
+                               max_context_len: int = 2048,
+                               rknn_core_num: int = 1,
+                               img_start: str = "<|image_start|>",
+                               img_end: str = "<|image_end|>",
+                               img_content: str = "<|image_content|>") -> bool:
+        """Initialize service without default image"""
         with self.lock:
-            if self.ctx is None:
-                self.ctx = self.lib.create_service()
-                if not self.ctx:
-                    return False
+            if self.ctx:
+                self.cleanup()
             
-            # Validate file existence
-            for path, name in [(image_path, "image"), 
-                              (encoder_model_path, "encoder model"),
-                              (llm_model_path, "llm model")]:
+            self.ctx = self.lib.create_service()
+            if not self.ctx:
+                return False
+            
+            # Validate model files
+            for path in [encoder_model_path, llm_model_path]:
                 if not Path(path).exists():
-                    print(f"❌ {name} file not found: {path}")
+                    self.lib.destroy_service(self.ctx)
+                    self.ctx = None
                     return False
             
-            img_start_bytes = img_start.encode() if img_start else None
-            img_end_bytes = img_end.encode() if img_end else None
-            img_content_bytes = img_content.encode() if img_content else None
+            self.encoder_model_path = encoder_model_path
+            self.llm_model_path = llm_model_path
             
-            ret = self.lib.initialize_service(
+            ret = self.lib.initialize_service_without_image(
                 self.ctx,
-                image_path.encode(),
                 encoder_model_path.encode(),
                 llm_model_path.encode(),
                 max_new_tokens,
                 max_context_len,
                 rknn_core_num,
-                img_start_bytes,
-                img_end_bytes,
-                img_content_bytes
+                img_start.encode(),
+                img_end.encode(),
+                img_content.encode()
             )
             
-            return ret == 0
+            self.initialized = (ret == 0)
+            return self.initialized
     
-    def generate(self, prompt: str, top_k: int = None, top_p: float = None, temperature: float = None) -> str:
-        """
-        Generate response for a prompt.
-        """
+    def generate(self,
+                 prompt: str,
+                 top_k: int = 1,
+                 top_p: float = 1.0,
+                 temperature: float = 0.7) -> str:
+        """Generate response for prompt"""
         with self.lock:
-            if self.ctx is None:
+            if not self.ctx or not self.initialized:
                 return "Error: Service not initialized"
-
-            # If any parameter is specified, use the parameterized version
-            if top_k is not None or top_p is not None or temperature is not None:
-                # Use default values if not specified
-                if top_k is None: top_k = 1
-                if top_p is None: top_p = 1.0
-                if temperature is None: temperature = 0.7
-
-                result = self.lib.generate_response_with_params(
-                    self.ctx, prompt.encode(), top_k, top_p, temperature
-                )
-            else:
-                result = self.lib.generate_response(self.ctx, prompt.encode())
-
-            if result:
-                return result.decode('utf-8', errors='ignore')
-            return ""
+            
+            result = self.lib.generate_response_with_params(
+                self.ctx,
+                prompt.encode(),
+                top_k,
+                top_p,
+                temperature
+            )
+            
+            return result.decode('utf-8', errors='ignore') if result else ""
     
-    def simple_inference(self,
-                        image_path: str,
-                        encoder_model_path: str,
-                        llm_model_path: str,
-                        prompt: str,
-                        max_new_tokens: int = 128,
-                        max_context_len: int = 2048,
-                        rknn_core_num: int = 1) -> str:
-        """
-        One-time inference without maintaining context.
-        """
-        result = self.lib.simple_inference(
-            image_path.encode(),
-            encoder_model_path.encode(),
-            llm_model_path.encode(),
-            prompt.encode(),
-            max_new_tokens,
-            max_context_len,
-            rknn_core_num
-        )
+    def generate_with_dynamic_image(self,
+                                   image_data_b64: str,
+                                   prompt: str,
+                                   top_k: int = 1,
+                                   top_p: float = 1.0,
+                                   temperature: float = 0.7) -> str:
+        """Generate response with dynamic image"""
+        with self.lock:
+            if not self.ctx or not self.initialized:
+                return "Error: Service not initialized"
+            
+            result = self.lib.generate_response_with_dynamic_image(
+                self.ctx,
+                image_data_b64.encode(),
+                len(image_data_b64),
+                prompt.encode(),
+                top_k,
+                top_p,
+                temperature
+            )
+            
+            return result.decode('utf-8', errors='ignore') if result else ""
+
+    def _create_streaming_callback(self, callback_id: int) -> ctypes.CFUNCTYPE:
+        """创建流式回调函数"""
+        @self.streaming_callback_type
+        def internal_callback(token_ptr: ctypes.c_char_p, userdata: ctypes.c_void_p) -> ctypes.c_int:
+            """内部回调函数，将token放入队列"""
+            token = None
+            if token_ptr:
+                try:
+                    # 解码token
+                    token_bytes = ctypes.string_at(token_ptr)
+                    if token_bytes:
+                        token = token_bytes.decode('utf-8', errors='ignore')
+                except:
+                    token = None
+            
+            # 将token放入队列
+            if callback_id in self._callback_queues:
+                self._callback_queues[callback_id].put(token)
+            
+            return 0  # 成功返回0
         
-        if result:
-            return result.decode('utf-8', errors='ignore')
-        return ""
-    
-    def cleanup(self):
-        """Clean up resources."""
-        with self.lock:
-            if self.ctx:
-                self.lib.cleanup_service(self.ctx)
-    
-    def update_runtime_params(self, max_new_tokens: int = None, max_context_len: int = None, rknn_core_num: int = None) -> bool:
-        """
-        Update runtime parameters.
-        """
-        with self.lock:
-            if self.ctx is None:
-                return False
+        return internal_callback
 
-            # Use current values if not specified
-            if max_new_tokens is None:
-                max_new_tokens = 128
-            if max_context_len is None:
-                max_context_len = 2048
-            if rknn_core_num is None:
-                rknn_core_num = 1
+    def generate_streaming_with_dynamic_image_generator(self,
+                                                       image_data_b64: str,
+                                                       prompt: str,
+                                                       top_k: int = 1,
+                                                       top_p: float = 1.0,
+                                                       temperature: float = 0.7) -> Generator[str, None, None]:
+        """生成流式响应的生成器（带动态图像）"""
+        with self.lock:
+            if not self.ctx or not self.initialized:
+                raise RuntimeError("Service not initialized")
+            
+            # 创建回调队列
+            callback_id = self._callback_counter
+            self._callback_counter += 1
+            callback_queue = Queue()
+            self._callback_queues[callback_id] = callback_queue
+            
+            # 创建回调函数
+            c_callback = self._create_streaming_callback(callback_id)
+            
+            # 创建线程来运行流式推理
+            def run_streaming():
+                try:
+                    result = self.lib.generate_streaming_with_dynamic_image(
+                        self.ctx,
+                        image_data_b64.encode(),
+                        len(image_data_b64),
+                        prompt.encode(),
+                        top_k,
+                        top_p,
+                        temperature,
+                        c_callback,
+                        None  # userdata
+                    )
+                    
+                    if result != 0:
+                        callback_queue.put(None)  # 发送结束信号
+                except Exception as e:
+                    print(f"Streaming error: {e}")
+                    callback_queue.put(None)  # 发送结束信号
+                finally:
+                    # 确保发送结束信号
+                    if callback_id in self._callback_queues:
+                        self._callback_queues[callback_id].put(None)
+            
+            # 启动流式推理线程
+            streaming_thread = threading.Thread(target=run_streaming)
+            streaming_thread.daemon = True
+            streaming_thread.start()
+            
+            # 从队列中获取token并生成
+            try:
+                while True:
+                    token = callback_queue.get(timeout=300)  # 5分钟超时
+                    if token is None:  # 结束信号
+                        break
+                    if token:  # 有效的token
+                        yield token
+            except Exception as e:
+                print(f"Queue error: {e}")
+            finally:
+                # 清理
+                if callback_id in self._callback_queues:
+                    del self._callback_queues[callback_id]
+                # 等待线程结束
+                streaming_thread.join(timeout=1)
+
+    def generate_streaming_generator(self,
+                                    prompt: str,
+                                    top_k: int = 1,
+                                    top_p: float = 1.0,
+                                    temperature: float = 0.7) -> Generator[str, None, None]:
+        """生成流式响应的生成器（不带图像）"""
+        with self.lock:
+            if not self.ctx or not self.initialized:
+                raise RuntimeError("Service not initialized")
+            
+            # 创建回调队列
+            callback_id = self._callback_counter
+            self._callback_counter += 1
+            callback_queue = Queue()
+            self._callback_queues[callback_id] = callback_queue
+            
+            # 创建回调函数
+            c_callback = self._create_streaming_callback(callback_id)
+            
+            # 创建线程来运行流式推理
+            def run_streaming():
+                try:
+                    result = self.lib.generate_streaming(
+                        self.ctx,
+                        prompt.encode(),
+                        top_k,
+                        top_p,
+                        temperature,
+                        c_callback,
+                        None  # userdata
+                    )
+                    
+                    if result != 0:
+                        callback_queue.put(None)  # 发送结束信号
+                except Exception as e:
+                    print(f"Streaming error: {e}")
+                    callback_queue.put(None)  # 发送结束信号
+                finally:
+                    # 确保发送结束信号
+                    if callback_id in self._callback_queues:
+                        self._callback_queues[callback_id].put(None)
+            
+            # 启动流式推理线程
+            streaming_thread = threading.Thread(target=run_streaming)
+            streaming_thread.daemon = True
+            streaming_thread.start()
+            
+            # 从队列中获取token并生成
+            try:
+                while True:
+                    token = callback_queue.get(timeout=300)  # 5分钟超时
+                    if token is None:  # 结束信号
+                        break
+                    if token:  # 有效的token
+                        yield token
+            except Exception as e:
+                print(f"Queue error: {e}")
+            finally:
+                # 清理
+                if callback_id in self._callback_queues:
+                    del self._callback_queues[callback_id]
+                # 等待线程结束
+                streaming_thread.join(timeout=1)
+
+    def update_runtime_params(self, max_new_tokens=None, max_context_len=None, rknn_core_num=None):
+        """Update runtime parameters"""
+        with self.lock:
+            if not self.ctx or not self.initialized:
+                return False
 
             ret = self.lib.update_runtime_params(
                 self.ctx,
-                max_new_tokens,
-                max_context_len,
-                rknn_core_num
+                max_new_tokens if max_new_tokens is not None else 128,
+                max_context_len if max_context_len is not None else 2048,
+                rknn_core_num if rknn_core_num is not None else 1
             )
 
             return ret == 0
 
-    def get_runtime_params(self) -> Dict[str, int]:
-        """
-        Get current runtime parameters.
-        """
+    def get_runtime_params(self):
+        """Get current runtime parameters"""
         with self.lock:
-            if self.ctx is None:
-                return {"max_new_tokens": 128, "max_context_len": 2048, "rknn_core_num": 1}
+            if not self.ctx or not self.initialized:
+                return {}
 
-            # Create ctypes variables to receive the values
-            max_new_tokens = ctypes.c_int()
-            max_context_len = ctypes.c_int()
-            rknn_core_num = ctypes.c_int()
+            max_tokens = ctypes.c_int()
+            max_context = ctypes.c_int()
+            rknn_cores = ctypes.c_int()
 
             self.lib.get_runtime_params(
                 self.ctx,
-                ctypes.byref(max_new_tokens),
-                ctypes.byref(max_context_len),
-                ctypes.byref(rknn_core_num)
+                ctypes.byref(max_tokens),
+                ctypes.byref(max_context),
+                ctypes.byref(rknn_cores)
             )
 
             return {
-                "max_new_tokens": max_new_tokens.value,
-                "max_context_len": max_context_len.value,
-                "rknn_core_num": rknn_core_num.value
+                'max_new_tokens': max_tokens.value,
+                'max_context_len': max_context.value,
+                'rknn_core_num': rknn_cores.value
             }
 
+    def get_service_info(self):
+        """Get service information"""
+        return {
+            "initialized": self.initialized,
+            "encoder_model": self.encoder_model_path,
+            "llm_model": self.llm_model_path,
+            "runtime_params": self.get_runtime_params(),
+            "capabilities": {
+                "streaming": True,  # 我们总是支持流式
+                "runtime_params": True
+            }
+        }
+
+    def cleanup(self):
+        """Clean up resources"""
+        with self.lock:
+            if self.ctx:
+                self.lib.cleanup_service(self.ctx)
+                self.initialized = False
+            # 清理所有回调队列
+            self._callback_queues.clear()
+
     def __del__(self):
-        """Destructor to clean up resources."""
-        if self.ctx:
+        """Destructor"""
+        if hasattr(self, 'ctx') and self.ctx:
             self.lib.destroy_service(self.ctx)
-            self.ctx = None
 
 # ==================== Pydantic Model Definitions ====================
-class ChatMessageContentItem(BaseModel):
+class ImageUrl(BaseModel):
+    url: str = Field(..., description="Image URL or base64 encoded image data")
+    detail: Optional[str] = Field(default="auto", description="Detail level for the image")
+
+class ContentPart(BaseModel):
     type: str = Field(..., description="Content type: text or image_url")
     text: Optional[str] = Field(None, description="Text content")
-    image_url: Optional[str] = Field(None, description="Image URL")
+    image_url: Optional[ImageUrl] = Field(None, description="Image URL")
 
-class ChatMessage(BaseModel):
+class Message(BaseModel):
     role: str = Field(..., description="Message role: system, user, assistant")
-    content: Union[str, List[ChatMessageContentItem]] = Field(..., description="Message content")
-
-class Function(BaseModel):
-    name: str = Field(..., description="Function name")
-    description: Optional[str] = Field(None, description="Function description")
-    parameters: Optional[Dict[str, Any]] = Field(None, description="Function parameters")
-
-class Tool(BaseModel):
-    type: str = Field(default="function", description="Tool type")
-    function: Optional[Function] = Field(None, description="Function definition")
+    content: Union[str, List[ContentPart]] = Field(..., description="Message content")
 
 class ChatCompletionRequest(BaseModel):
     model: str = Field(default="rkllm-vision", description="Model name")
-    messages: List[ChatMessage] = Field(..., description="List of messages")
+    messages: List[Message] = Field(..., description="List of messages")
     temperature: Optional[float] = Field(default=0.7, ge=0.0, le=2.0, description="Temperature parameter (0.0-2.0)")
     top_p: Optional[float] = Field(default=1.0, ge=0.0, le=1.0, description="Top-p sampling parameter (0.0-1.0)")
     top_k: Optional[int] = Field(default=1, ge=1, le=100, description="Top-k sampling parameter (1-100)")
     n: Optional[int] = Field(default=1, ge=1, le=10, description="Number of completions to generate")
     stream: Optional[bool] = Field(default=False, description="Whether to stream the response")
-    max_tokens: Optional[int] = Field(default=128, ge=1, le=4096, description="Maximum tokens to generate")
+    max_tokens: Optional[int] = Field(default=50, ge=1, le=4096, description="Maximum tokens to generate")
     presence_penalty: Optional[float] = Field(default=0.0, ge=-2.0, le=2.0, description="Presence penalty")
     frequency_penalty: Optional[float] = Field(default=0.0, ge=-2.0, le=2.0, description="Frequency penalty")
-    logit_bias: Optional[Dict[str, float]] = Field(None, description="Logit bias")
-    user: Optional[str] = Field(None, description="User identifier")
     stop: Optional[List[str]] = Field(None, description="Stop sequences")
-    tools: Optional[List[Tool]] = Field(None, description="List of tools")
-    tool_choice: Optional[str] = Field(None, description="Tool choice")
     max_context_len: Optional[int] = Field(default=2048, ge=512, le=8192, description="Maximum context length")
-    rknn_core_num: Optional[int] = Field(default=1, ge=1, le=4, description="Number of RKNN cores to use")
+    rknn_core_num: Optional[int] = Field(default=3, ge=1, le=4, description="Number of RKNN cores to use")
 
 class UsageInfo(BaseModel):
     prompt_tokens: int = Field(default=0, description="Prompt tokens")
@@ -344,7 +493,7 @@ class UsageInfo(BaseModel):
 
 class ChatCompletionResponseChoice(BaseModel):
     index: int = Field(..., description="Choice index")
-    message: ChatMessage = Field(..., description="Message")
+    message: Message = Field(..., description="Message")
     finish_reason: Optional[str] = Field(default="stop", description="Finish reason")
 
 class ChatCompletionResponse(BaseModel):
@@ -373,143 +522,75 @@ class ChatCompletionStreamResponse(BaseModel):
     choices: List[ChatCompletionStreamResponseChoice] = Field(..., description="List of choices")
     system_fingerprint: Optional[str] = Field(default="fp_rkllm_vision", description="System fingerprint")
 
-class ModelInfo(BaseModel):
-    id: str = Field(..., description="Model ID")
-    object: str = Field(default="model", description="Object type")
-    created: int = Field(..., description="Creation time")
-    owned_by: str = Field(default="rockchip", description="Owner")
-
-class ModelsListResponse(BaseModel):
-    object: str = Field(default="list", description="Object type")
-    data: List[ModelInfo] = Field(..., description="List of models")
-
-class RuntimeParams(BaseModel):
-    max_new_tokens: int = Field(default=128, description="Maximum new tokens")
-    max_context_len: int = Field(default=2048, description="Maximum context length")
-    rknn_core_num: int = Field(default=1, description="Number of RKNN cores")
-
-# ==================== Global State Management ====================
-class RequestState:
-    """State management for individual requests"""
-    def __init__(self, request_id: str):
-        self.request_id = request_id
-        self.response_text = ""
-        self.completed = threading.Event()
-        self.lock = threading.Lock()
-        self.error = None
-        self.start_time = time.time()
-
-# Server configuration
+# ==================== Server Configuration ====================
 class ServerConfig:
     def __init__(self):
         self.max_context_len = 2048
         self.default_temperature = 0.7
         self.default_top_p = 1.0
         self.default_top_k = 1
-        self.default_max_tokens = 128
-        self.max_concurrent_requests = 2
-        self.timeout_seconds = 120
-        self.rknn_core_num = 1
-        self.image_path = ""
+        self.default_max_tokens = 50
+        self.max_concurrent_requests = 1
+        self.timeout_seconds = 300
+        self.rknn_core_num = 3
         self.encoder_model_path = ""
         self.llm_model_path = ""
         self.img_start = "<|image_start|>"
         self.img_end = "<|image_end|>"
         self.img_content = "<|image_content|>"
+        self.library_path = "../build_native/librkllm_service.so.1.0.0"
 
 config = ServerConfig()
 
 # Global variables
 request_lock = threading.Lock()
 active_requests = 0
-request_states: Dict[str, RequestState] = {}
 rkllm_service = None
 executor = None
 
+# Configure logging
+logging.basicConfig(
+    level=logging.INFO,
+    format='%(asctime)s - %(levelname)s - %(message)s'
+)
+logger = logging.getLogger(__name__)
+
 # ==================== Helper Functions ====================
-def extract_user_prompt(messages: List[ChatMessage]) -> str:
-    """Extract user prompt from messages"""
-    for msg in reversed(messages):
+def extract_user_content(messages: List[Message]) -> tuple[str, str]:
+    """
+    Extract user content and image data from messages.
+    Returns: (text_content, image_data_b64)
+    """
+    text_content = ""
+    image_data_b64 = None
+    
+    for msg in messages:
         if msg.role == "user":
             if isinstance(msg.content, str):
-                return msg.content
+                text_content = msg.content
             elif isinstance(msg.content, list):
-                # Handle multimodal content
                 for item in msg.content:
                     if item.type == "text" and item.text:
-                        return item.text
-    return ""
+                        text_content = item.text
+                    elif item.type == "image_url" and item.image_url:
+                        url = item.image_url.url
+                        if url.startswith("data:image"):
+                            parts = url.split(",")
+                            if len(parts) > 1:
+                                image_data_b64 = parts[1]
+                            else:
+                                image_data_b64 = url
+                        else:
+                            image_data_b64 = url
+            break
+    
+    return text_content, image_data_b64
 
 def estimate_tokens(text: str) -> int:
-    """Estimate token count (rough approximation)"""
+    """Estimate token count"""
     if not text:
         return 0
-    
-    # Simple estimation: Chinese characters ~1.5 tokens, others ~0.3 tokens
-    chinese_chars = sum(1 for c in text if '\u4e00' <= c <= '\u9fff')
-    other_chars = len(text) - chinese_chars
-    
-    return int(chinese_chars * 1.5 + other_chars * 0.3)
-
-def process_chat_completion(request: ChatCompletionRequest, request_id: str) -> RequestState:
-    """Process chat completion request"""
-    global rkllm_service
-    
-    # Create request state
-    req_state = RequestState(request_id)
-    request_states[request_id] = req_state
-    
-    try:
-        # Extract user prompt
-        prompt = extract_user_prompt(request.messages)
-        if not prompt:
-            req_state.error = "No user message found"
-            req_state.completed.set()
-            return req_state
-        
-        # Update runtime parameters if needed
-        if (request.max_tokens != config.default_max_tokens or 
-            request.max_context_len != config.max_context_len or
-            request.rknn_core_num != config.rknn_core_num):
-            
-            success = rkllm_service.update_runtime_params(
-                max_new_tokens=request.max_tokens,
-                max_context_len=request.max_context_len,
-                rknn_core_num=request.rknn_core_num
-            )
-            if not success:
-                print(f"[{request_id}] Warning: Failed to update runtime parameters")
-        
-        # Print debug information
-        print(f"[{request_id}] Processing request:")
-        print(f"  Prompt: {prompt[:100]}...")
-        print(f"  Temperature: {request.temperature}")
-        print(f"  Top-p: {request.top_p}")
-        print(f"  Top-k: {request.top_k}")
-        print(f"  Max tokens: {request.max_tokens}")
-        
-        # Generate response
-        response_text = rkllm_service.generate(
-            prompt=prompt,
-            top_k=request.top_k,
-            top_p=request.top_p,
-            temperature=request.temperature
-        )
-        
-        req_state.response_text = response_text
-        req_state.completed.set()
-        
-        elapsed = time.time() - req_state.start_time
-        print(f"✅ [{request_id}] Inference completed in {elapsed:.2f}s")
-        
-        return req_state
-        
-    except Exception as e:
-        error_msg = f"Error processing request {request_id}: {str(e)}"
-        print(f"✗ {error_msg}")
-        req_state.error = error_msg
-        req_state.completed.set()
-        return req_state
+    return int(len(text) * 0.3)
 
 # ==================== Application Lifecycle Management ====================
 @asynccontextmanager
@@ -517,29 +598,24 @@ async def lifespan(app: FastAPI):
     """FastAPI lifespan context manager"""
     global rkllm_service, executor
     
-    # Startup
-    print("=" * 60)
-    print("Starting RKLLM Vision API Server")
-    print("=" * 60)
+    logger.info("=" * 60)
+    logger.info("Starting RKLLM Vision API Server")
+    logger.info("=" * 60)
     
     # Initialize thread pool
     executor = ThreadPoolExecutor(
-        max_workers=config.max_concurrent_requests + 2,
+        max_workers=config.max_concurrent_requests + 1,
         thread_name_prefix="rkllm_vision_worker"
     )
-    print("✅ Thread pool initialized")
+    logger.info("✅ Thread pool initialized")
     
     # Initialize RKLLM service
     try:
-        # Load RKLLM service library
-        lib_path = os.getenv("RKLLM_SERVICE_LIB", "/usr/lib/librkllm_service.so")
+        lib_path = config.library_path
         
-        # Initialize service
         rkllm_service = RKLLMService(lib_path)
         
-        # Apply configuration
-        success = rkllm_service.initialize(
-            image_path=config.image_path,
+        success = rkllm_service.initialize_without_image(
             encoder_model_path=config.encoder_model_path,
             llm_model_path=config.llm_model_path,
             max_new_tokens=config.default_max_tokens,
@@ -553,33 +629,30 @@ async def lifespan(app: FastAPI):
         if not success:
             raise RuntimeError("Failed to initialize RKLLM vision service")
         
-        print("✅ RKLLM vision service initialized successfully!")
+        logger.info("✅ RKLLM vision service initialized successfully!")
+        logger.info(f"  Vision encoder: {Path(config.encoder_model_path).name}")
+        logger.info(f"  LLM model: {Path(config.llm_model_path).name}")
+        
+        service_info = rkllm_service.get_service_info()
+        logger.info(f"  Streaming support: {'Yes' if service_info['capabilities']['streaming'] else 'No'}")
+        logger.info(f"  Runtime params support: {'Yes' if service_info['capabilities']['runtime_params'] else 'No'}")
         
     except Exception as e:
-        print(f"❌ Failed to initialize service: {e}")
-        print("Please check:")
-        print("1. Model files exist and are accessible")
-        print("2. RKLLM service library is built")
-        print("3. OpenCL drivers are installed")
+        logger.error(f"❌ Failed to initialize service: {e}")
         raise
     
     yield
     
     # Shutdown
-    print("\nShutting down server...")
+    logger.info("\nShutting down server...")
     
-    # Clean up request states
-    request_states.clear()
-    
-    # Shutdown thread pool
     if executor:
         executor.shutdown(wait=False)
-        print("✅ Thread pool shut down")
+        logger.info("✅ Thread pool shut down")
     
-    # Release service
     if rkllm_service:
         rkllm_service.cleanup()
-        print("✅ Service resources released")
+        logger.info("✅ Service resources released")
 
 # ==================== FastAPI Application ====================
 app = FastAPI(
@@ -604,58 +677,58 @@ app.add_middleware(
 @app.get("/")
 async def root():
     """Root endpoint"""
+    service_info = rkllm_service.get_service_info() if rkllm_service else None
+    
     return {
         "message": "RKLLM Vision API Server",
         "status": "running",
-        "vision_model": config.encoder_model_path.split('/')[-1],
-        "llm_model": config.llm_model_path.split('/')[-1],
-        "image": config.image_path.split('/')[-1],
+        "service": {
+            "initialized": service_info["initialized"] if service_info else False,
+            "vision_model": Path(config.encoder_model_path).name if config.encoder_model_path else None,
+            "llm_model": Path(config.llm_model_path).name if config.llm_model_path else None,
+        },
         "version": "1.0.0",
         "endpoints": {
             "GET /": "Server information",
             "GET /health": "Health check",
             "GET /v1/models": "List models",
-            "POST /v1/chat/completions": "Chat completion",
-            "GET /v1/runtime_params": "Get runtime parameters",
-            "POST /v1/runtime_params": "Update runtime parameters"
+            "POST /v1/chat/completions": "Chat completion"
         }
     }
 
 @app.get("/health")
 async def health_check():
     """Health check endpoint"""
+    service_info = rkllm_service.get_service_info() if rkllm_service else None
+    
     return {
-        "status": "healthy" if rkllm_service else "unhealthy",
-        "service_initialized": rkllm_service is not None,
+        "status": "healthy" if rkllm_service and service_info["initialized"] else "unhealthy",
+        "service_initialized": service_info["initialized"] if service_info else False,
         "active_requests": active_requests,
         "max_concurrent": config.max_concurrent_requests,
         "timestamp": int(time.time())
     }
 
-@app.get("/v1/models", response_model=ModelsListResponse)
+@app.get("/v1/models")
 async def list_models():
     """List available models"""
-    return ModelsListResponse(
-        data=[
-            ModelInfo(
-                id="rkllm-vision",
-                created=int(time.time()),
-                owned_by="rockchip"
-            ),
-            ModelInfo(
-                id="rkllm-vision-2b",
-                created=int(time.time()),
-                owned_by="rockchip"
-            )
+    return {
+        "object": "list",
+        "data": [
+            {
+                "id": "rkllm-vision",
+                "object": "model",
+                "created": int(time.time()),
+                "owned_by": "rockchip"
+            }
         ]
-    )
+    }
 
 @app.post("/v1/chat/completions")
 async def create_chat_completion(request: ChatCompletionRequest):
-    """Create chat completion - Fully OpenAI API compatible"""
+    """Create chat completion"""
     global active_requests
     
-    # Check concurrent request limit
     with request_lock:
         if active_requests >= config.max_concurrent_requests:
             raise HTTPException(
@@ -674,18 +747,40 @@ async def create_chat_completion(request: ChatCompletionRequest):
         request_id = f"chatcmpl-{uuid.uuid4().hex[:24]}"
         created = int(time.time())
         
-        print(f"[{request_id}] New request: stream={request.stream}, messages={len(request.messages)}")
+        logger.info(f"[{request_id}] New request: stream={request.stream}, messages={len(request.messages)}")
+        
+        # Extract content
+        text_content, image_b64 = extract_user_content(request.messages)
+        
+        if not text_content:
+            raise HTTPException(status_code=400, detail="No user message found")
+        
+        # Prepare prompt - IMPORTANT: Add <image> tag if there's an image
+        if image_b64:
+            prompt = f"<image>{text_content}"
+        else:
+            prompt = text_content
+        
+        # Update runtime parameters if needed
+        if (request.max_tokens != config.default_max_tokens or 
+            request.max_context_len != config.max_context_len or
+            request.rknn_core_num != config.rknn_core_num):
+            
+            success = rkllm_service.update_runtime_params(
+                max_new_tokens=request.max_tokens,
+                max_context_len=request.max_context_len,
+                rknn_core_num=request.rknn_core_num
+            )
+            if not success:
+                logger.warning(f"[{request_id}] Failed to update runtime parameters")
+        
+        logger.info(f"[{request_id}] Processing request with {'image' if image_b64 else 'text only'}")
         
         if request.stream:
-            # Streaming response (simulated since RKLLM service doesn't support true streaming)
-            async def generate_stream():
-                nonlocal request_id
-                
+            # 真正的流式响应
+            async def generate_real_stream():
                 try:
-                    # Submit task to thread pool
-                    future = executor.submit(process_chat_completion, request, request_id)
-                    
-                    # Send initial message
+                    # 发送初始chunk（assistant角色）
                     initial_chunk = ChatCompletionStreamResponse(
                         id=request_id,
                         created=created,
@@ -700,40 +795,86 @@ async def create_chat_completion(request: ChatCompletionRequest):
                     )
                     yield f"data: {initial_chunk.model_dump_json(exclude_unset=True, ensure_ascii=False)}\n\n"
                     
-                    # Wait for completion
-                    req_state = None
-                    start_time = time.time()
+                    # 创建流式生成器
+                    if image_b64:
+                        # 使用真正的流式推理
+                        def streaming_task():
+                            try:
+                                generator = rkllm_service.generate_streaming_with_dynamic_image_generator(
+                                    image_data_b64=image_b64,
+                                    prompt=prompt,
+                                    top_k=request.top_k,
+                                    top_p=request.top_p,
+                                    temperature=request.temperature
+                                )
+                                result = []
+                                for token in generator:
+                                    result.append(token)
+                                return "".join(result)
+                            except Exception as e:
+                                logger.error(f"[{request_id}] Streaming error: {e}")
+                                return f"[ERROR] {e}"
+                    else:
+                        # 纯文本流式推理
+                        def streaming_task():
+                            try:
+                                generator = rkllm_service.generate_streaming_generator(
+                                    prompt=prompt,
+                                    top_k=request.top_k,
+                                    top_p=request.top_p,
+                                    temperature=request.temperature
+                                )
+                                result = []
+                                for token in generator:
+                                    result.append(token)
+                                return "".join(result)
+                            except Exception as e:
+                                logger.error(f"[{request_id}] Streaming error: {e}")
+                                return f"[ERROR] {e}"
                     
-                    while True:
-                        if request_id in request_states:
-                            req_state = request_states[request_id]
-                            
-                            if req_state.completed.is_set():
-                                break
-                        
-                        # Check timeout
-                        if time.time() - start_time > 30:  # 30 seconds timeout
-                            print(f"[{request_id}] Streaming response timeout")
-                            break
-                        
-                        # Brief wait
-                        await asyncio.sleep(0.1)
+                    # 在单独的线程中运行流式推理
+                    future = executor.submit(streaming_task)
                     
-                    if req_state and req_state.completed.is_set():
-                        if req_state.error:
-                            error_data = {
-                                "error": {
-                                    "message": req_state.error,
-                                    "type": "server_error"
-                                }
-                            }
-                            yield f"data: {json.dumps(error_data, ensure_ascii=False)}\n\n"
+                    # 我们需要实时获取token，但上面的实现是收集所有token后再返回
+                    # 为了真正的流式，我们需要修改生成器以实时回调
+                    # 这里我们使用一个队列来实现实时token传递
+                    token_queue = Queue()
+                    
+                    # 定义实时回调的生成器
+                    def real_time_generator():
+                        if image_b64:
+                            for token in rkllm_service.generate_streaming_with_dynamic_image_generator(
+                                image_data_b64=image_b64,
+                                prompt=prompt,
+                                top_k=request.top_k,
+                                top_p=request.top_p,
+                                temperature=request.temperature
+                            ):
+                                token_queue.put(token)
                         else:
-                            # Send content in chunks (simulated streaming)
-                            content = req_state.response_text
-                            chunk_size = 20
-                            for i in range(0, len(content), chunk_size):
-                                chunk = content[i:i+chunk_size]
+                            for token in rkllm_service.generate_streaming_generator(
+                                prompt=prompt,
+                                top_k=request.top_k,
+                                top_p=request.top_p,
+                                temperature=request.temperature
+                            ):
+                                token_queue.put(token)
+                        token_queue.put(None)  # 结束信号
+                    
+                    # 启动实时生成器线程
+                    gen_thread = threading.Thread(target=real_time_generator)
+                    gen_thread.daemon = True
+                    gen_thread.start()
+                    
+                    # 从队列中获取token并发送
+                    while True:
+                        try:
+                            token = token_queue.get(timeout=300)  # 5分钟超时
+                            if token is None:  # 结束信号
+                                break
+                            
+                            if token:
+                                # 发送token chunk
                                 data_chunk = ChatCompletionStreamResponse(
                                     id=request_id,
                                     created=created,
@@ -741,15 +882,18 @@ async def create_chat_completion(request: ChatCompletionRequest):
                                     choices=[
                                         ChatCompletionStreamResponseChoice(
                                             index=0,
-                                            delta=DeltaMessage(content=chunk),
+                                            delta=DeltaMessage(content=token),
                                             finish_reason=None
                                         )
                                     ]
                                 )
                                 yield f"data: {data_chunk.model_dump_json(exclude_unset=True, ensure_ascii=False)}\n\n"
-                                await asyncio.sleep(0.05)  # Simulate streaming delay
+                        
+                        except Exception as e:
+                            logger.error(f"[{request_id}] Token queue error: {e}")
+                            break
                     
-                    # Send completion marker
+                    # 发送完成chunk
                     done_chunk = ChatCompletionStreamResponse(
                         id=request_id,
                         created=created,
@@ -766,167 +910,110 @@ async def create_chat_completion(request: ChatCompletionRequest):
                     yield "data: [DONE]\n\n"
                     
                 except Exception as e:
-                    print(f"[{request_id}] Stream generation error: {e}")
-                    error_data = {
-                        "error": {
-                            "message": str(e),
-                            "type": "server_error"
-                        }
-                    }
-                    yield f"data: {json.dumps(error_data, ensure_ascii=False)}\n\n"
-                finally:
-                    # Clean up request state
-                    if request_id in request_states:
-                        del request_states[request_id]
+                    logger.error(f"[{request_id}] Stream generation error: {e}")
+                    error_data = {"error": {"message": str(e)}}
+                    yield f"data: {json.dumps(error_data)}\n\n"
             
             return StreamingResponse(
-                generate_stream(),
-                media_type="text/event-stream",
-                headers={
-                    "Cache-Control": "no-cache",
-                    "Connection": "keep-alive",
-                    "X-Accel-Buffering": "no"
-                }
+                generate_real_stream(),
+                media_type="text/event-stream"
             )
-            
         else:
-            # Non-streaming response
-            def process_non_stream():
-                nonlocal request_id
-                
+            # 非流式响应
+            def process_inference():
+                """Process inference in thread pool"""
                 try:
-                    req_state = process_chat_completion(request, request_id)
-                    
-                    if req_state.error:
-                        raise HTTPException(status_code=500, detail=req_state.error)
-                    
-                    # Estimate token usage
-                    prompt = extract_user_prompt(request.messages)
-                    prompt_tokens = estimate_tokens(prompt)
-                    completion_tokens = estimate_tokens(req_state.response_text)
-                    
-                    # Build response
-                    response = ChatCompletionResponse(
-                        id=request_id,
-                        created=created,
-                        model=request.model,
-                        choices=[
-                            ChatCompletionResponseChoice(
-                                index=0,
-                                message=ChatMessage(
-                                    role="assistant",
-                                    content=req_state.response_text
-                                ),
-                                finish_reason="stop"
-                            )
-                        ],
-                        usage=UsageInfo(
-                            prompt_tokens=prompt_tokens,
-                            completion_tokens=completion_tokens,
-                            total_tokens=prompt_tokens + completion_tokens
+                    if image_b64:
+                        response_text = rkllm_service.generate_with_dynamic_image(
+                            image_data_b64=image_b64,
+                            prompt=prompt,
+                            top_k=request.top_k,
+                            top_p=request.top_p,
+                            temperature=request.temperature
                         )
-                    )
+                    else:
+                        response_text = rkllm_service.generate(
+                            prompt=prompt,
+                            top_k=request.top_k,
+                            top_p=request.top_p,
+                            temperature=request.temperature
+                        )
                     
-                    return response
-                finally:
-                    # Clean up request state
-                    if request_id in request_states:
-                        del request_states[request_id]
+                    return response_text
+                except Exception as e:
+                    logger.error(f"[{request_id}] Inference error: {e}")
+                    raise HTTPException(status_code=500, detail=str(e))
             
-            # Execute in thread pool
             try:
-                response = await asyncio.get_event_loop().run_in_executor(
-                    executor, process_non_stream
+                response_text = await asyncio.get_event_loop().run_in_executor(
+                    executor, process_inference
                 )
+                
+                # Estimate token usage
+                prompt_tokens = estimate_tokens(text_content)
+                completion_tokens = estimate_tokens(response_text)
+                
+                # Build response
+                response = ChatCompletionResponse(
+                    id=request_id,
+                    created=created,
+                    model=request.model,
+                    choices=[
+                        ChatCompletionResponseChoice(
+                            index=0,
+                            message=Message(
+                                role="assistant",
+                                content=response_text
+                            ),
+                            finish_reason="stop"
+                        )
+                    ],
+                    usage=UsageInfo(
+                        prompt_tokens=prompt_tokens,
+                        completion_tokens=completion_tokens,
+                        total_tokens=prompt_tokens + completion_tokens
+                    )
+                )
+                
                 return response
+                
             except HTTPException:
                 raise
             except Exception as e:
                 raise HTTPException(status_code=500, detail=str(e))
-            
-    except HTTPException:
-        raise
-    except Exception as e:
-        print(f"[ERROR] Chat completion error: {e}")
-        raise HTTPException(status_code=500, detail=str(e))
+                
     finally:
         with request_lock:
             active_requests -= 1
 
-@app.get("/v1/runtime_params")
-async def get_runtime_params():
-    """Get current runtime parameters."""
-    if not rkllm_service:
-        raise HTTPException(status_code=500, detail="RKLLM service not initialized")
-    
-    try:
-        params = rkllm_service.get_runtime_params()
-        return {"runtime_params": params}
-    except Exception as e:
-        print(f"Error getting runtime parameters: {str(e)}")
-        raise HTTPException(status_code=500, detail=str(e))
-
-@app.post("/v1/runtime_params")
-async def update_runtime_params(
-    max_new_tokens: Optional[int] = None,
-    max_context_len: Optional[int] = None,
-    rknn_core_num: Optional[int] = None
-):
-    """Update runtime parameters."""
-    if not rkllm_service:
-        raise HTTPException(status_code=500, detail="RKLLM service not initialized")
-    
-    try:
-        success = rkllm_service.update_runtime_params(
-            max_new_tokens=max_new_tokens,
-            max_context_len=max_context_len,
-            rknn_core_num=rknn_core_num
-        )
-
-        if success:
-            params = rkllm_service.get_runtime_params()
-            return {"success": True, "updated_params": params}
-        else:
-            raise HTTPException(status_code=500, detail="Failed to update runtime parameters")
-    except Exception as e:
-        print(f"Error updating runtime parameters: {str(e)}")
-        raise HTTPException(status_code=500, detail=str(e))
-
 # ==================== Main Program ====================
 if __name__ == "__main__":
-    # Parse command line arguments
     parser = argparse.ArgumentParser(
         description="RKLLM Vision API Compatible Server",
         formatter_class=argparse.RawDescriptionHelpFormatter,
         epilog="""
 Examples:
-  python rkllm_vision_server.py --image_path ../data/demo.jpg \\
-                                --encoder_model ../model/Qwen2-VL-2B_vision_rk3588.rknn \\
-                                --llm_model ../model/Qwen2-VL-2B_llm_w8a8_rk3588.rkllm \\
-                                --target_platform rk3588
+  python rkllm_vision_server.py \\
+    --encoder_model ../model/Qwen2-VL-2B_VISION_RK3588.rknn \\
+    --llm_model ../model/Qwen2-VL-2B_LLM_W8A8_RK3588.rkllm
   
-  python rkllm_vision_server.py --image_path ../data/demo.jpg \\
-                                --encoder_model ../model/vision.rknn \\
-                                --llm_model ../model/llm.rkllm \\
-                                --port 8080 --max_concurrent 2 --default_temperature 0.7
+  python rkllm_vision_server.py \\
+    --encoder_model ../model/vision.rknn \\
+    --llm_model ../model/llm.rkllm \\
+    --port 8080 --max_concurrent 1 --default_max_tokens 50
         """
     )
     
-    # Required arguments
-    parser.add_argument('--image_path', type=str, required=True,
-                       help='Path to image file')
     parser.add_argument('--encoder_model', type=str, required=True,
                        help='Path to vision encoder model (.rknn)')
     parser.add_argument('--llm_model', type=str, required=True,
                        help='Path to LLM model (.rkllm)')
     
-    # Server parameters
-    parser.add_argument('--port', type=int, default=8001,
-                       help='Server port (default: 8001)')
+    parser.add_argument('--port', type=int, default=8002,
+                       help='Server port (default: 8002)')
     parser.add_argument('--host', type=str, default='0.0.0.0',
                        help='Server host (default: 0.0.0.0)')
     
-    # Model parameters
     parser.add_argument('--max_context_len', type=int, default=2048,
                        help='Maximum context length (default: 2048)')
     parser.add_argument('--default_temperature', type=float, default=0.7,
@@ -934,19 +1021,17 @@ Examples:
     parser.add_argument('--default_top_p', type=float, default=1.0,
                        help='Default top_p parameter (default: 1.0)')
     parser.add_argument('--default_top_k', type=int, default=1,
-                       help='Default top_k parameter (default: 1, range: 1-100)')
-    parser.add_argument('--default_max_tokens', type=int, default=128,
-                       help='Default maximum tokens to generate (default: 128)')
+                       help='Default top_k parameter (default: 1)')
+    parser.add_argument('--default_max_tokens', type=int, default=50,
+                       help='Default maximum tokens to generate (default: 50)')
     
-    # Performance parameters
-    parser.add_argument('--max_concurrent', type=int, default=2,
-                       help='Maximum concurrent requests (default: 2)')
-    parser.add_argument('--timeout', type=int, default=120,
-                       help='Request timeout in seconds (default: 120)')
-    parser.add_argument('--rknn_core_num', type=int, default=1,
-                       help='Number of RKNN cores to use (default: 1)')
+    parser.add_argument('--max_concurrent', type=int, default=1,
+                       help='Maximum concurrent requests (default: 1)')
+    parser.add_argument('--timeout', type=int, default=300,
+                       help='Request timeout in seconds (default: 300)')
+    parser.add_argument('--rknn_core_num', type=int, default=3,
+                       help='Number of RKNN cores to use (default: 3)')
     
-    # Image token parameters
     parser.add_argument('--img_start', type=str, default='<|image_start|>',
                        help='Image start token (default: <|image_start|>)')
     parser.add_argument('--img_end', type=str, default='<|image_end|>',
@@ -954,30 +1039,29 @@ Examples:
     parser.add_argument('--img_content', type=str, default='<|image_content|>',
                        help='Image content token (default: <|image_content|>)')
     
-    # Debug parameters
+    parser.add_argument('--library_path', type=str, default='../build_native/librkllm_service.so.1.0.0',
+                       help='Path to RKLLM service library')
+    
     parser.add_argument('--debug', action='store_true',
                        help='Enable debug mode')
     
     args = parser.parse_args()
     
-    # Validate model files
-    for path, name in [(args.image_path, "image"), 
-                      (args.encoder_model, "encoder model"),
+    # Validate files
+    for path, name in [(args.encoder_model, "encoder model"),
                       (args.llm_model, "LLM model")]:
         if not os.path.exists(path):
             print(f"❌ Error: {name} file not found: {path}")
             sys.exit(1)
     
-    # Validate top_k range
-    if args.default_top_k < 1 or args.default_top_k > 100:
-        print(f"⚠ Warning: default_top_k should be between 1 and 100, got {args.default_top_k}")
-        args.default_top_k = max(1, min(100, args.default_top_k))
-        print(f"  Adjusted to: {args.default_top_k}")
+    if not os.path.exists(args.library_path):
+        print(f"❌ Error: RKLLM service library not found: {args.library_path}")
+        sys.exit(1)
     
     # Apply configuration
-    config.image_path = os.path.abspath(args.image_path)
     config.encoder_model_path = os.path.abspath(args.encoder_model)
     config.llm_model_path = os.path.abspath(args.llm_model)
+    config.library_path = os.path.abspath(args.library_path)
     config.max_context_len = args.max_context_len
     config.default_temperature = args.default_temperature
     config.default_top_p = args.default_top_p
@@ -990,12 +1074,14 @@ Examples:
     config.img_end = args.img_end
     config.img_content = args.img_content
     
+    if args.debug:
+        logger.setLevel(logging.DEBUG)
+    
     # Print configuration
     print("=" * 60)
     print("Configuration:")
-    print(f"  Image: {args.image_path}")
-    print(f"  Vision encoder: {args.encoder_model}")
-    print(f"  LLM model: {args.llm_model}")
+    print(f"  Vision encoder: {Path(config.encoder_model_path).name}")
+    print(f"  LLM model: {Path(config.llm_model_path).name}")
     print(f"  Host: {args.host}")
     print(f"  Port: {args.port}")
     print(f"  Max context length: {config.max_context_len}")
@@ -1014,10 +1100,9 @@ Examples:
             app,
             host=args.host,
             port=args.port,
-            log_level="info" if not args.debug else "debug",
+            log_level="debug" if args.debug else "info",
             access_log=True,
-            timeout_keep_alive=30,
-            server_header=False
+            timeout_keep_alive=config.timeout_seconds
         )
     except KeyboardInterrupt:
         print("\n👋 Server interrupted by user")

@@ -25,17 +25,17 @@ jobs:
       matrix:
         include:
           - alias: "7b-w8a8"
-            file: "Qwen2_VL_7B_VISION_RK3588.rknn"
-            url: "https://huggingface.co/JiahaoLi/Qwen2-VL-RK3588/resolve/main/Qwen2_VL_7B_VISION_RK3588.rknn"
-            file: "Qwen2_VL_7B_LLM_RK3588.rkllm"
-            url: "https://huggingface.co/JiahaoLi/Qwen2-VL-RK3588/resolve/main/Qwen2-VL-7B_LLM_W8A8_RK3588.rkllm"
+            vision_file: "Qwen2_VL_7B_VISION_RK3588.rknn"
+            vision_url: "https://huggingface.co/JiahaoLi/Qwen2-VL-RK3588/resolve/main/Qwen2_VL_7B_VISION_RK3588.rknn"
+            llm_file: "Qwen2_VL_7B_LLM_RK3588.rkllm"
+            llm_url: "https://huggingface.co/JiahaoLi/Qwen2-VL-RK3588/resolve/main/Qwen2-VL-7B_LLM_W8A8_RK3588.rkllm"
 
           
           - alias: "2b-w8a8"
-            file: "Qwen2_VL_2B_VISION_RK3588.rknn"
-            url: "https://huggingface.co/JiahaoLi/Qwen2-VL-RK3588/resolve/main/Qwen2-VL-2B_VISION_RK3588.rknn"
-            file: "Qwen2_VL_2B_LLM_RK3588.rkllm"
-            url: "https://huggingface.co/JiahaoLi/Qwen2-VL-RK3588/resolve/main/Qwen2-VL-2B_LLM_W8A8_RK3588.rkllm"
+            vision_file: "Qwen2_VL_2B_VISION_RK3588.rknn"
+            vision_url: "https://huggingface.co/JiahaoLi/Qwen2-VL-RK3588/resolve/main/Qwen2-VL-2B_VISION_RK3588.rknn"
+            llm_file: "Qwen2_VL_2B_LLM_RK3588.rkllm"
+            llm_url: "https://huggingface.co/JiahaoLi/Qwen2-VL-RK3588/resolve/main/Qwen2-VL-2B_LLM_W8A8_RK3588.rkllm"
 
     steps:
       - name: Checkout repository
@@ -90,8 +90,10 @@ jobs:
           platforms: linux/arm64
           provenance: false
           build-args: |
-            MODEL_URL=${{ matrix.url }}
-            MODEL_FILE=${{ matrix.file }}
+            LLM_URL=${{ matrix.llm_url }}
+            LLM_FILE=${{ matrix.llm_file }}
+            VISION_URL=${{ matrix.vision_url }}
+            VISION_FILE=${{ matrix.vision_file }}
           tags: ${{ steps.meta.outputs.tags }}
           labels: ${{ steps.meta.outputs.labels }}
           cache-from: type=gha

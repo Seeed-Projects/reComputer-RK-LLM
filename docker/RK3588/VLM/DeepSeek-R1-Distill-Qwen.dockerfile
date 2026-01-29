@@ -20,19 +20,26 @@ RUN chmod +x /app/fix_freq_rk3588.sh
 
 # --- 最终阶段 ---
 FROM base AS final
-ARG MODEL_URL
-ARG MODEL_FILE
+ARG LLM_URL
+ARG LLM_MODEL
+ARG VISION_URL
+ARG VISION_MODEL
 
 # 必须在这里重新下载或声明，因为 ARG 在不同阶段不共享
-RUN if [ -n "${MODEL_URL}" ]; then \
-    wget --progress=dot:giga "${MODEL_URL}" -O "/app/models/${MODEL_FILE}"; \
+RUN if [ -n "${LLM_URL}" ]; then \
+    wget --progress=dot:giga "${LLM_URL}}" -O "/app/models/${LLM_MODEL}"; \
+    fi
+RUN if [ -n "${VISION_URL}" ]; then \
+    wget --progress=dot:giga "${LLM_URL}}" -O "/app/models/${VISION_MODEL}"; \
     fi
 
 COPY ./src/vlm/fastapi_server_vlm.py /app/
 
 # 将 ARG 转为 ENV，这样 CMD 才能读取到
-ENV RKLLM_MODEL_PATH=/app/models/${MODEL_FILE}
+ENV LLM_MODEL_PATH=/app/models/${LLM_MODEL}
+ENV VISION_MODEL_PATH=/app/models/$P{VISION_MODEL}
 
-EXPOSE 8001
 
-CMD ["sh", "-c", "python3 /app/fastapi_server_vlm.py --rkllm_model_path ${RKLLM_MODEL_PATH} --target_platform rk3576"]
+EXPOSE 8002
+
+CMD ["sh", "-c", "python3 /app/fastapi_server_vlm.py --llm_model ${LLM_MODEL_PATH} --encoder_model ${VISION_MODEL_PATH}"]

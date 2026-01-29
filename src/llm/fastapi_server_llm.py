@@ -883,7 +883,7 @@ if __name__ == "__main__":
 Examples:
   python rkllm_server.py --rkllm_model_path ../model/model.rkllm --target_platform rk3588
   python rkllm_server.py --rkllm_model_path ../model/model.rkllm --target_platform rk3588 \\
-                         --port 8080 --max_concurrent 2 --default_temperature 0.7 --default_top_k 50
+                         --port 8001 --max_concurrent 2 --default_temperature 0.7 --default_top_k 50
         """
     )
     
