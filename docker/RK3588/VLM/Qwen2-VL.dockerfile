@@ -15,6 +15,7 @@ RUN pip install --no-cache-dir -r /app/requirements.txt
 # 拷贝运行时库和工具
 COPY ./lib/librkllmrt.so /usr/lib/librkllmrt.so 
 COPY ./lib/librkllm_service.so /usr/lib/librkllm_service.so 
+COPY  ./lib/librknnrt.so /usr/lib/librknnrt.so
 COPY ./src/fix_freq_rk3588.sh /app/fix_freq_rk3588.sh
 RUN chmod +x /app/fix_freq_rk3588.sh
 
