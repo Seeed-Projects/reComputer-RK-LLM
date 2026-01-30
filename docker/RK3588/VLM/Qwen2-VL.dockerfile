@@ -25,20 +25,24 @@ ARG LLM_MODEL
 ARG VISION_URL
 ARG VISION_MODEL
 
-# 必须在这里重新下载或声明，因为 ARG 在不同阶段不共享
-RUN if [ -n "${LLM_URL}" ]; then \
-    wget --progress=dot:giga "${LLM_URL}}" -O "/app/models/${LLM_MODEL}"; \
+# 检查变量是否设置，如果设置了就下载模型
+RUN if [ -n "${LLM_URL}" ] && [ -n "${LLM_MODEL}" ]; then \
+    wget --progress=dot:giga "${LLM_URL}" -O "/app/models/${LLM_MODEL}"; \
+    else \
+    echo "LLM_URL or LLM_MODEL not set, skipping LLM model download"; \
     fi
-RUN if [ -n "${VISION_URL}" ]; then \
-    wget --progress=dot:giga "${LLM_URL}}" -O "/app/models/${VISION_MODEL}"; \
+
+RUN if [ -n "${VISION_URL}" ] && [ -n "${VISION_MODEL}" ]; then \
+    wget --progress=dot:giga "${VISION_URL}" -O "/app/models/${VISION_MODEL}"; \
+    else \
+    echo "VISION_URL or VISION_MODEL not set, skipping vision model download"; \
     fi
 
 COPY ./src/vlm/fastapi_server_vlm.py /app/
 
 # 将 ARG 转为 ENV，这样 CMD 才能读取到
-ENV LLM_MODEL_PATH=/app/models/${LLM_MODEL}
-ENV VISION_MODEL_PATH=/app/models/$P{VISION_MODEL}
-
+ENV LLM_MODEL_PATH=/app/models/${LLM_MODEL:-Qwen2-VL-7B_LLM_W8A8_RK3588.rkllm}
+ENV VISION_MODEL_PATH=/app/models/${VISION_MODEL:-Qwen2-VL-7B_Encoder_W8A8_RK3588.rkllm}
 
 EXPOSE 8002
 
