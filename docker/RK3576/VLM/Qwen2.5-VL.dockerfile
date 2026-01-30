@@ -10,6 +10,7 @@ RUN mkdir -p /app/models
 
 # 安装依赖
 COPY ./src/vlm/requirements.txt /app/requirements.txt
+COPY ./src/vlm/fastapi_server_vlm.py /app/fastapi_server_vlm.py
 RUN pip install --no-cache-dir -r /app/requirements.txt
 
 # 拷贝运行时库和工具
