@@ -7,6 +7,7 @@ on:
       - 'src/vlm/**'
       - 'docker/RK3588/VLM/Qwen2-VL.dockerfile'
       - '.github/workflows/RK3588-Qwen2-VL.yml'
+      - 'lib/**'
   workflow_dispatch:
   
 env:
