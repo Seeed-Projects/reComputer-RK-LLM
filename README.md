@@ -3,7 +3,6 @@
 [![Stargazers][stars-shield]][stars-url]
 [![Issues][issues-shield]][issues-url]
 [![MIT License][license-shield]][license-url]
-[![Huggingface][huggingface-shield]][huggingface-url]
 
 # Install Docker
 
@@ -771,5 +770,3 @@ Reference: [rknn-llm](https://github.com/airockchip/rknn-llm/tree/main)
 [issues-url]: https://github.com/Seeed-Projects/reComputer-RK-LLM/issues
 [license-shield]: https://img.shields.io/github/license/Seeed-Projects/reComputer-RK-LLM.svg?style=for-the-badge
 [license-url]: https://github.com/Seeed-Projects/reComputer-RK-LLM/blob/master/LICENSE.txt
-[huggingface-shield]: https://img.shields.io/github/license/Seeed-Projects/reComputer-RK-LLM.svg?style=for-the-badge
-[huggingface-url]: https://huggingface.co/JiahaoLi
