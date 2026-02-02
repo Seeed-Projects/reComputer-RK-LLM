@@ -557,10 +557,12 @@ logger = logging.getLogger(__name__)
 
 # ==================== Helper Functions ====================
 def extract_user_content(messages: List[Message]) -> tuple[str, str]:
-    """
-    Extract user content and image data from messages.
-    Returns: (text_content, image_data_b64)
-    """
+    """提取用户内容和图片数据"""
+    import base64
+    import requests
+    from io import BytesIO
+    from PIL import Image
+    
     text_content = ""
     image_data_b64 = None
     
@@ -574,13 +576,37 @@ def extract_user_content(messages: List[Message]) -> tuple[str, str]:
                         text_content = item.text
                     elif item.type == "image_url" and item.image_url:
                         url = item.image_url.url
+                        
+                        # 处理base64格式
                         if url.startswith("data:image"):
                             parts = url.split(",")
                             if len(parts) > 1:
                                 image_data_b64 = parts[1]
                             else:
                                 image_data_b64 = url
+                        # 处理HTTP/HTTPS URL - 新增
+                        elif url.startswith(("http://", "https://")):
+                            try:
+                                logger.info(f"下载图片: {url}")
+                                response = requests.get(url, timeout=30)
+                                response.raise_for_status()
+                                
+                                # 验证是否为图片
+                                content_type = response.headers.get('content-type', '')
+                                if not content_type.startswith('image/'):
+                                    logger.warning(f"URL返回的不是图片: {content_type}")
+                                
+                                # 转换为base64
+                                image_bytes = response.content
+                                image_data_b64 = base64.b64encode(image_bytes).decode('utf-8')
+                                logger.info(f"图片下载成功，base64长度: {len(image_data_b64)}")
+                                
+                            except Exception as e:
+                                logger.error(f"下载图片失败 {url}: {e}")
+                                image_data_b64 = None
                         else:
+                            # 可能是文件路径或其他
+                            logger.warning(f"无法识别的图片格式: {url}")
                             image_data_b64 = url
             break
     

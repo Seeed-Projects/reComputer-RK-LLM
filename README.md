@@ -6,22 +6,55 @@ curl -fsSL https://get.docker.com -o get-docker.sh && sudo sh get-docker.sh
 
 # Start inference
 
-## For RK3588
+# Start inference
+
+### LLM
+
+| Device | Model |
+|--------|-------|
+| **RK3588** | [rk3588-deepseek-r1-distill-qwen:7b-w8a8-latest](https://github.com/LJ-Hao/reComputer-RK-LLM/pkgs/container/rk3588-deepseek-r1-distill-qwen/662247747?tag=7b-w8a8-latest)<br>[rk3588-deepseek-r1-distill-qwen:1.5b-fp16-latest](https://github.com/LJ-Hao/reComputer-RK-LLM/pkgs/container/rk3588-deepseek-r1-distill-qwen/662243577?tag=1.5b-fp16-latest)<br>[rk3588-deepseek-r1-distill-qwen:1.5b-w8a8-latest](https://github.com/LJ-Hao/reComputer-RK-LLM/pkgs/container/rk3588-deepseek-r1-distill-qwen/662236226?tag=1.5b-w8a8-latest) | 
+| **RK3576** | [rk3576-deepseek-r1-distill-qwen:7b-w4a16-g128-latest](https://github.com/LJ-Hao/reComputer-RK-LLM/pkgs/container/rk3576-deepseek-r1-distill-qwen/662240247?tag=7b-w4a16-g128-latest)<br>[rk3576-deepseek-r1-distill-qwen:7b-w4a16-latest](https://github.com/LJ-Hao/reComputer-RK-LLM/pkgs/container/rk3576-deepseek-r1-distill-qwen/662239597?tag=7b-w4a16-latest)<br>[rk3576-deepseek-r1-distill-qwen:1.5b-fp16-latest](https://github.com/LJ-Hao/reComputer-RK-LLM/pkgs/container/rk3576-deepseek-r1-distill-qwen/662236690?tag=1.5b-fp16-latest)<br>[rk3576-deepseek-r1-distill-qwen:1.5b-w4a16-g128-latest](https://github.com/LJ-Hao/reComputer-RK-LLM/pkgs/container/rk3576-deepseek-r1-distill-qwen/662235949?tag=1.5b-w4a16-g128-latest)<br>[rk3576-deepseek-r1-distill-qwen:1.5b-w4a16-latest](https://github.com/LJ-Hao/reComputer-RK-LLM/pkgs/container/rk3576-deepseek-r1-distill-qwen/662234478?tag=1.5b-w4a16-latest) | 
+
+For example:
 
 ```bash
-docker run -it --name deepseek-r1-1.5b-fp16   --privileged    --net=host    --device /dev/dri    --device /dev/dma_heap    --device /dev/rknpu    --device /dev/mali0    -v /dev:/dev      ghcr.io/lj-hao/rk3588-deepseek-r1-distill-qwen:1.5b-fp16-latest
+docker run -it --name deepseek-r1-1.5b-fp16 \
+  --privileged \
+  --net=host \
+  --device /dev/dri \
+  --device /dev/dma_heap \
+  --device /dev/rknpu \
+  --device /dev/mali0 \
+  -v /dev:/dev \
+  ghcr.io/lj-hao/rk3588-deepseek-r1-distill-qwen:1.5b-fp16-latest
 ```
 
-## For RK3576
+>Note: When you start the service, you can access `http://localhost:8001/docs` and `http://localhost:8001/redoc` to view the documentation.
+
+### VLM
+
+| Device | Model |
+|--------|-------|
+| **RK3588** | [rk3588-qwen2-vl:7b-w8a8-latest](https://github.com/LJ-Hao/reComputer-RK-LLM/pkgs/container/rk3588-qwen2-vl/666595093?tag=7b-w8a8-latest)<br>[rk3588-qwen2-vl:2b-w8a8-latest](https://github.com/LJ-Hao/reComputer-RK-LLM/pkgs/container/rk3588-qwen2-vl/666591327?tag=2b-w8a8-latest)<br> | 
+| **RK3576** | [rk3576-qwen2.5-vl:3b-w4a16-latest](https://github.com/LJ-Hao/reComputer-RK-LLM/pkgs/container/rk3576-qwen2.5-vl)<br>| 
 
 ```bash
-docker run -it --name deepseek-r1-1.5b-fp16   --privileged    --net=host    --device /dev/dri    --device /dev/dma_heap    --device /dev/rknpu    --device /dev/mali0    -v /dev:/dev      ghcr.io/lj-hao/rk3576-deepseek-r1-distill-qwen:1.5b-fp16-latest
+sudo docker run -it --name qwen2.5-3b-w4a16-vl \
+  --privileged \
+  --net=host \
+  --device /dev/dri \
+  --device /dev/dma_heap \
+  --device /dev/rknpu \
+  --device /dev/mali0 \
+  -v /dev:/dev \
+  ghcr.io/lj-hao/rk3576-qwen2.5-vl:3b-w4a16-latest
 ```
 
->Note: When you start the service, you can access `http://localhost:8080/docs` and `http://localhost:8080/redoc` to view the documentation.
-# Test API：
+>Note: When you start the service, you can access `http://localhost:8002/docs` and `http://localhost:8002/redoc` to view the documentation.
 
-## Non-streaming response：
+# LLM
+## Commandline
+### Non-streaming response：
 
 ```bash
 curl http://127.0.0.1:8080/v1/chat/completions \
@@ -38,7 +71,7 @@ curl http://127.0.0.1:8080/v1/chat/completions \
   }'
 ```
 
-## Streaming response:
+### Streaming response:
 
 ```bash
 curl -N http://127.0.0.1:8080/v1/chat/completions \
@@ -55,9 +88,9 @@ curl -N http://127.0.0.1:8080/v1/chat/completions \
   }'
 ```
 
-# Use OpenAI API
+## Use OpenAI API
 
-## Non-streaming response：
+### Non-streaming response：
 
 ```python
 import openai
@@ -82,7 +115,7 @@ response = client.chat.completions.create(
 print(response.choices[0].message.content)
 ```
 
-## Streaming response:
+### Streaming response:
 
 ```python
 import openai
