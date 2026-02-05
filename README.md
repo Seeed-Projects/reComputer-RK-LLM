@@ -64,7 +64,7 @@ sudo docker run -it --name qwen2.5-3b-w4a16-vl \
 
 >Note: When you start the service, you can access `http://localhost:8002/docs` and `http://localhost:8002/redoc` to view the documentation.
 
-# API Test
+# API Usage
 ## LLM
 ### Commandline
 #### Non-streaming response：
