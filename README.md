@@ -4,7 +4,7 @@
 [![Issues][issues-shield]][issues-url]
 [![MIT License][license-shield]][license-url]
 # Introduction
-This repository utilizes Docker to package large language models and multimodal models optimized for Rockchip platforms. It provides a unified calling interface that is compatible with the OpenAI API, making it easy for users to integrate and use these models.
+This repository utilizes [Docker](https://www.docker.com/) to package large language models and multimodal models optimized for Rockchip platforms. It provides a unified calling interface that is compatible with the OpenAI API, making it easy for users to integrate and use these models.
 
 # Hardware Prepare
 
