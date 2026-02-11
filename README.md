@@ -171,7 +171,7 @@ curl -X POST http://localhost:8002/v1/chat/completions \
           {
             "type": "image_url",
             "image_url": {
-              "url": "https://github.com/LJ-Hao/reComputer-RK-LLM/blob/main/img/test.jpeg"
+              "url": "https://github.com/LJ-Hao/reComputer-RK-LLM/blob/main/img/test.jpeg?raw=true"
             }
           }
         ]
@@ -201,7 +201,7 @@ curl -X POST http://localhost:8002/v1/chat/completions \
           {
             "type": "image_url",
             "image_url": {
-              "url": "https://github.com/LJ-Hao/reComputer-RK-LLM/blob/main/img/test.jpeg"
+              "url": "https://github.com/LJ-Hao/reComputer-RK-LLM/blob/main/img/test.jpeg?raw=true"
             }
           }
         ]
@@ -232,7 +232,7 @@ def test_image_description():
     print("=== Non-Streaming Image Description Test ===")
     
     # Download image from URL and convert to base64
-    image_url = "https://github.com/LJ-Hao/reComputer-RK-LLM/raw/main/img/test.jpeg"
+    image_url = "https://github.com/LJ-Hao/reComputer-RK-LLM/blob/main/img/test.jpeg?raw=true"
     
     try:
         # Download image
@@ -326,7 +326,7 @@ def test_streaming_image_description():
     print("=== Streaming Image Description Test ===")
     
     # Download test image
-    image_url = "https://github.com/LJ-Hao/reComputer-RK-LLM/raw/main/img/test.jpeg"
+    image_url = "https://github.com/LJ-Hao/reComputer-RK-LLM/blob/main/img/test.jpeg?raw=true"
     
     try:
         print("Downloading test image...")
