@@ -22,8 +22,8 @@ curl -fsSL https://get.docker.com -o get-docker.sh && sudo sh get-docker.sh
 
 | Device | Model |
 |--------|-------|
-| **RK3588** | [rk3588-deepseek-r1-distill-qwen:7b-w8a8-latest](https://github.com/LJ-Hao/reComputer-RK-LLM/pkgs/container/rk3588-deepseek-r1-distill-qwen/662247747?tag=7b-w8a8-latest)<br>[rk3588-deepseek-r1-distill-qwen:1.5b-fp16-latest](https://github.com/LJ-Hao/reComputer-RK-LLM/pkgs/container/rk3588-deepseek-r1-distill-qwen/662243577?tag=1.5b-fp16-latest)<br>[rk3588-deepseek-r1-distill-qwen:1.5b-w8a8-latest](https://github.com/LJ-Hao/reComputer-RK-LLM/pkgs/container/rk3588-deepseek-r1-distill-qwen/662236226?tag=1.5b-w8a8-latest) | 
-| **RK3576** | [rk3576-deepseek-r1-distill-qwen:7b-w4a16-g128-latest](https://github.com/LJ-Hao/reComputer-RK-LLM/pkgs/container/rk3576-deepseek-r1-distill-qwen/662240247?tag=7b-w4a16-g128-latest)<br>[rk3576-deepseek-r1-distill-qwen:7b-w4a16-latest](https://github.com/LJ-Hao/reComputer-RK-LLM/pkgs/container/rk3576-deepseek-r1-distill-qwen/662239597?tag=7b-w4a16-latest)<br>[rk3576-deepseek-r1-distill-qwen:1.5b-fp16-latest](https://github.com/LJ-Hao/reComputer-RK-LLM/pkgs/container/rk3576-deepseek-r1-distill-qwen/662236690?tag=1.5b-fp16-latest)<br>[rk3576-deepseek-r1-distill-qwen:1.5b-w4a16-g128-latest](https://github.com/LJ-Hao/reComputer-RK-LLM/pkgs/container/rk3576-deepseek-r1-distill-qwen/662235949?tag=1.5b-w4a16-g128-latest)<br>[rk3576-deepseek-r1-distill-qwen:1.5b-w4a16-latest](https://github.com/LJ-Hao/reComputer-RK-LLM/pkgs/container/rk3576-deepseek-r1-distill-qwen/662234478?tag=1.5b-w4a16-latest) | 
+| **RK3588** | [rk3588-deepseek-r1-distill-qwen:7b-w8a8-latest](https://github.com/seeed-projects/reComputer-RK-LLM/pkgs/container/rk3588-deepseek-r1-distill-qwen/662247747?tag=7b-w8a8-latest)<br>[rk3588-deepseek-r1-distill-qwen:1.5b-fp16-latest](https://github.com/seeed-projects/reComputer-RK-LLM/pkgs/container/rk3588-deepseek-r1-distill-qwen/662243577?tag=1.5b-fp16-latest)<br>[rk3588-deepseek-r1-distill-qwen:1.5b-w8a8-latest](https://github.com/seeed-projects/reComputer-RK-LLM/pkgs/container/rk3588-deepseek-r1-distill-qwen/662236226?tag=1.5b-w8a8-latest) | 
+| **RK3576** | [rk3576-deepseek-r1-distill-qwen:7b-w4a16-g128-latest](https://github.com/seeed-projects/reComputer-RK-LLM/pkgs/container/rk3576-deepseek-r1-distill-qwen/662240247?tag=7b-w4a16-g128-latest)<br>[rk3576-deepseek-r1-distill-qwen:7b-w4a16-latest](https://github.com/seeed-projects/reComputer-RK-LLM/pkgs/container/rk3576-deepseek-r1-distill-qwen/662239597?tag=7b-w4a16-latest)<br>[rk3576-deepseek-r1-distill-qwen:1.5b-fp16-latest](https://github.com/seeed-projects/reComputer-RK-LLM/pkgs/container/rk3576-deepseek-r1-distill-qwen/662236690?tag=1.5b-fp16-latest)<br>[rk3576-deepseek-r1-distill-qwen:1.5b-w4a16-g128-latest](https://github.com/seeed-projects/reComputer-RK-LLM/pkgs/container/rk3576-deepseek-r1-distill-qwen/662235949?tag=1.5b-w4a16-g128-latest)<br>[rk3576-deepseek-r1-distill-qwen:1.5b-w4a16-latest](https://github.com/seeed-projects/reComputer-RK-LLM/pkgs/container/rk3576-deepseek-r1-distill-qwen/662234478?tag=1.5b-w4a16-latest) | 
 
 For example:
 
@@ -36,7 +36,7 @@ docker run -it --name deepseek-r1-1.5b-fp16 \
   --device /dev/rknpu \
   --device /dev/mali0 \
   -v /dev:/dev \
-  ghcr.io/lj-hao/rk3588-deepseek-r1-distill-qwen:1.5b-fp16-latest
+  ghcr.io/seeed-projects/rk3588-deepseek-r1-distill-qwen:1.5b-fp16-latest
 ```
 
 >Note: When you start the service, you can access `http://localhost:8001/docs` and `http://localhost:8001/redoc` to view the documentation.
@@ -45,8 +45,8 @@ docker run -it --name deepseek-r1-1.5b-fp16 \
 
 | Device | Model |
 |--------|-------|
-| **RK3588** | [rk3588-qwen2-vl:7b-w8a8-latest](https://github.com/LJ-Hao/reComputer-RK-LLM/pkgs/container/rk3588-qwen2-vl/666595093?tag=7b-w8a8-latest)<br>[rk3588-qwen2-vl:2b-w8a8-latest](https://github.com/LJ-Hao/reComputer-RK-LLM/pkgs/container/rk3588-qwen2-vl/666591327?tag=2b-w8a8-latest)<br> | 
-| **RK3576** | [rk3576-qwen2.5-vl:3b-w4a16-latest](https://github.com/LJ-Hao/reComputer-RK-LLM/pkgs/container/rk3576-qwen2.5-vl)<br>| 
+| **RK3588** | [rk3588-qwen2-vl:7b-w8a8-latest](https://github.com/seeed-projects/reComputer-RK-LLM/pkgs/container/rk3588-qwen2-vl/666595093?tag=7b-w8a8-latest)<br>[rk3588-qwen2-vl:2b-w8a8-latest](https://github.com/seeed-projects/reComputer-RK-LLM/pkgs/container/rk3588-qwen2-vl/666591327?tag=2b-w8a8-latest)<br> | 
+| **RK3576** | [rk3576-qwen2.5-vl:3b-w4a16-latest](https://github.com/seeed-projects/reComputer-RK-LLM/pkgs/container/rk3576-qwen2.5-vl)<br>| 
 
 
 For example:
@@ -59,7 +59,7 @@ sudo docker run -it --name qwen2.5-3b-w4a16-vl \
   --device /dev/rknpu \
   --device /dev/mali0 \
   -v /dev:/dev \
-  ghcr.io/lj-hao/rk3576-qwen2.5-vl:3b-w4a16-latest
+  ghcr.io/seeed-projects/rk3576-qwen2.5-vl:3b-w4a16-latest
 ```
 
 >Note: When you start the service, you can access `http://localhost:8002/docs` and `http://localhost:8002/redoc` to view the documentation.
@@ -177,7 +177,7 @@ curl -X POST http://localhost:8002/v1/chat/completions \
           {
             "type": "image_url",
             "image_url": {
-              "url": "https://github.com/LJ-Hao/reComputer-RK-LLM/blob/main/img/test.jpeg"
+              "url": "https://github.com/seeed-projects/reComputer-RK-LLM/blob/main/img/test.jpeg"
             }
           }
         ]
@@ -207,7 +207,7 @@ curl -X POST http://localhost:8002/v1/chat/completions \
           {
             "type": "image_url",
             "image_url": {
-              "url": "https://github.com/LJ-Hao/reComputer-RK-LLM/blob/main/img/test.jpeg"
+              "url": "https://github.com/seeed-projects/reComputer-RK-LLM/blob/main/img/test.jpeg"
             }
           }
         ]
@@ -238,7 +238,7 @@ def test_image_description():
     print("=== Non-Streaming Image Description Test ===")
     
     # Download image from URL and convert to base64
-    image_url = "https://github.com/LJ-Hao/reComputer-RK-LLM/raw/main/img/test.jpeg"
+    image_url = "https://github.com/seeed-projects/reComputer-RK-LLM/raw/main/img/test.jpeg"
     
     try:
         # Download image
@@ -332,7 +332,7 @@ def test_streaming_image_description():
     print("=== Streaming Image Description Test ===")
     
     # Download test image
-    image_url = "https://github.com/LJ-Hao/reComputer-RK-LLM/raw/main/img/test.jpeg"
+    image_url = "https://github.com/seeed-projects/reComputer-RK-LLM/raw/main/img/test.jpeg"
     
     try:
         print("Downloading test image...")
