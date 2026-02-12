@@ -31,13 +31,10 @@ def preload_libraries():
     """Preload necessary system libraries to fix OpenCL issues"""
     try:
         # Set environment variables
-        os.environ['LD_PRELOAD'] = '/usr/lib/aarch64-linux-gnu/libmali.so.1:' + os.environ.get('LD_PRELOAD', '')
         os.environ['LD_LIBRARY_PATH'] = '/usr/lib/aarch64-linux-gnu:/usr/lib:' + os.environ.get('LD_LIBRARY_PATH', '')
 
         # Preload libraries
         libs = [
-            'libmali.so.1',
-            'libOpenCL.so',
             'librknnrt.so',
         ]
 
