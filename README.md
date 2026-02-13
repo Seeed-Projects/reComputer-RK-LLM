@@ -22,8 +22,8 @@ curl -fsSL https://get.docker.com -o get-docker.sh && sudo sh get-docker.sh
 
 | Device | Model |
 |--------|-------|
-| **RK3588** | [rk3588-deepseek-r1-distill-qwen:7b-w8a8-latest](https://github.com/seeed-projects/reComputer-RK-LLM/pkgs/container/rk3588-deepseek-r1-distill-qwen/662247747?tag=7b-w8a8-latest)<br>[rk3588-deepseek-r1-distill-qwen:1.5b-fp16-latest](https://github.com/seeed-projects/reComputer-RK-LLM/pkgs/container/rk3588-deepseek-r1-distill-qwen/662243577?tag=1.5b-fp16-latest)<br>[rk3588-deepseek-r1-distill-qwen:1.5b-w8a8-latest](https://github.com/seeed-projects/reComputer-RK-LLM/pkgs/container/rk3588-deepseek-r1-distill-qwen/662236226?tag=1.5b-w8a8-latest) | 
-| **RK3576** | [rk3576-deepseek-r1-distill-qwen:7b-w4a16-g128-latest](https://github.com/seeed-projects/reComputer-RK-LLM/pkgs/container/rk3576-deepseek-r1-distill-qwen/662240247?tag=7b-w4a16-g128-latest)<br>[rk3576-deepseek-r1-distill-qwen:7b-w4a16-latest](https://github.com/seeed-projects/reComputer-RK-LLM/pkgs/container/rk3576-deepseek-r1-distill-qwen/662239597?tag=7b-w4a16-latest)<br>[rk3576-deepseek-r1-distill-qwen:1.5b-fp16-latest](https://github.com/seeed-projects/reComputer-RK-LLM/pkgs/container/rk3576-deepseek-r1-distill-qwen/662236690?tag=1.5b-fp16-latest)<br>[rk3576-deepseek-r1-distill-qwen:1.5b-w4a16-g128-latest](https://github.com/seeed-projects/reComputer-RK-LLM/pkgs/container/rk3576-deepseek-r1-distill-qwen/662235949?tag=1.5b-w4a16-g128-latest)<br>[rk3576-deepseek-r1-distill-qwen:1.5b-w4a16-latest](https://github.com/seeed-projects/reComputer-RK-LLM/pkgs/container/rk3576-deepseek-r1-distill-qwen/662234478?tag=1.5b-w4a16-latest) | 
+| **RK3588** | [rk3588-deepseek-r1-distill-qwen:7b-w8a8-latest](https://github.com/Seeed-Projects/reComputer-RK-LLM/pkgs/container/rk3588-deepseek-r1-distill-qwen/682844605?tag=7b-w8a8-latest)<br>[rk3588-deepseek-r1-distill-qwen:1.5b-fp16-latest](https://github.com/Seeed-Projects/reComputer-RK-LLM/pkgs/container/rk3588-deepseek-r1-distill-qwen/682838759?tag=1.5b-fp16-latest)<br>[rk3588-deepseek-r1-distill-qwen:1.5b-w8a8-latest](https://github.com/Seeed-Projects/reComputer-RK-LLM/pkgs/container/rk3588-deepseek-r1-distill-qwen/682835173?tag=1.5b-w8a8-latest) | 
+| **RK3576** | [rk3576-deepseek-r1-distill-qwen:7b-w4a16-g128-latest](https://github.com/Seeed-Projects/reComputer-RK-LLM/pkgs/container/rk3576-deepseek-r1-distill-qwen/682837577?tag=7b-w4a16-g128-latest)<br>[rk3576-deepseek-r1-distill-qwen:7b-w4a16-latest](https://github.com/Seeed-Projects/reComputer-RK-LLM/pkgs/container/rk3576-deepseek-r1-distill-qwen/682832575?tag=1.5b-w4a16-latest)<br>[rk3576-deepseek-r1-distill-qwen:1.5b-fp16-latest](https://github.com/Seeed-Projects/reComputer-RK-LLM/pkgs/container/rk3576-deepseek-r1-distill-qwen/682834349?tag=1.5b-fp16-latest)<br>[rk3576-deepseek-r1-distill-qwen:1.5b-w4a16-g128-latest](https://github.com/Seeed-Projects/reComputer-RK-LLM/pkgs/container/rk3576-deepseek-r1-distill-qwen/682832500?tag=1.5b-w4a16-g128-latest)<br>[rk3576-deepseek-r1-distill-qwen:1.5b-w4a16-latest](https://github.com/Seeed-Projects/reComputer-RK-LLM/pkgs/container/rk3576-deepseek-r1-distill-qwen/682832575?tag=1.5b-w4a16-latest) | 
 
 For example:
 
@@ -45,8 +45,8 @@ docker run -it --name deepseek-r1-1.5b-fp16 \
 
 | Device | Model |
 |--------|-------|
-| **RK3588** | [rk3588-qwen2-vl:7b-w8a8-latest](https://github.com/seeed-projects/reComputer-RK-LLM/pkgs/container/rk3588-qwen2-vl/666595093?tag=7b-w8a8-latest)<br>[rk3588-qwen2-vl:2b-w8a8-latest](https://github.com/seeed-projects/reComputer-RK-LLM/pkgs/container/rk3588-qwen2-vl/666591327?tag=2b-w8a8-latest)<br> | 
-| **RK3576** | [rk3576-qwen2.5-vl:3b-w4a16-latest](https://github.com/seeed-projects/reComputer-RK-LLM/pkgs/container/rk3576-qwen2.5-vl)<br>| 
+| **RK3588** | [rk3588-qwen2-vl:7b-w8a8-latest](https://github.com/Seeed-Projects/reComputer-RK-LLM/pkgs/container/rk3588-qwen2-vl/682842044?tag=7b-w8a8-latest)<br>[rk3588-qwen2-vl:2b-w8a8-latest](https://github.com/Seeed-Projects/reComputer-RK-LLM/pkgs/container/rk3588-qwen2-vl/682835375?tag=2b-w8a8-latest)<br> | 
+| **RK3576** | [rk3576-qwen2.5-vl:3b-w4a16-latest](https://github.com/Seeed-Projects/reComputer-RK-LLM/pkgs/container/rk3576-qwen2.5-vl/682834538?tag=3b-w4a16-latest)<br>| 
 
 
 For example:
