@@ -28,7 +28,7 @@ curl -fsSL https://get.docker.com -o get-docker.sh && sudo sh get-docker.sh
 For example:
 
 ```bash
-docker run -it --name deepseek-r1-1.5b-fp16 \
+sudo docker run -it --name deepseek-r1-1.5b-fp16 \
   --privileged \
   --net=host \
   --device /dev/dri \
