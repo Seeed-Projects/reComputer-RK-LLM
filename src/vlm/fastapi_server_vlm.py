@@ -31,13 +31,10 @@ def preload_libraries():
     """Preload necessary system libraries to fix OpenCL issues"""
     try:
         # Set environment variables
-        os.environ['LD_PRELOAD'] = '/usr/lib/aarch64-linux-gnu/libmali.so.1:' + os.environ.get('LD_PRELOAD', '')
         os.environ['LD_LIBRARY_PATH'] = '/usr/lib/aarch64-linux-gnu:/usr/lib:' + os.environ.get('LD_LIBRARY_PATH', '')
 
         # Preload libraries
         libs = [
-            'libmali.so.1',
-            'libOpenCL.so',
             'librknnrt.so',
         ]
 
@@ -529,7 +526,7 @@ class ServerConfig:
         self.default_temperature = 0.7
         self.default_top_p = 1.0
         self.default_top_k = 1
-        self.default_max_tokens = 50
+        self.default_max_tokens = 512
         self.max_concurrent_requests = 1
         self.timeout_seconds = 300
         self.rknn_core_num = 3
@@ -1026,7 +1023,7 @@ Examples:
   python rkllm_vision_server.py \\
     --encoder_model ../model/vision.rknn \\
     --llm_model ../model/llm.rkllm \\
-    --port 8080 --max_concurrent 1 --default_max_tokens 50
+    --port 8080 --max_concurrent 1 --default_max_tokens 512
         """
     )
     
@@ -1048,8 +1045,8 @@ Examples:
                        help='Default top_p parameter (default: 1.0)')
     parser.add_argument('--default_top_k', type=int, default=1,
                        help='Default top_k parameter (default: 1)')
-    parser.add_argument('--default_max_tokens', type=int, default=50,
-                       help='Default maximum tokens to generate (default: 50)')
+    parser.add_argument('--default_max_tokens', type=int, default=512,
+                       help='Default maximum tokens to generate (default: 512)')
     
     parser.add_argument('--max_concurrent', type=int, default=1,
                        help='Maximum concurrent requests (default: 1)')
