@@ -36,7 +36,7 @@ docker run -it --name deepseek-r1-1.5b-fp16 \
   --device /dev/rknpu \
   --device /dev/mali0 \
   -v /dev:/dev \
-  ghcr.io/seeed-projects/rk3588-deepseek-r1-distill-qwen:1.5b-fp16-latest
+  ghcr.io/seeed-projects/rk3576-deepseek-r1-distill-qwen:1.5b-fp16-latest
 ```
 
 >Note: When you start the service, you can access `http://localhost:8001/docs` and `http://localhost:8001/redoc` to view the documentation.
