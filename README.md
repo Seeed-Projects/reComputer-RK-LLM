@@ -8,7 +8,7 @@ This repository utilizes [Docker](https://www.docker.com/) to package large lang
 
 # Hardware Prepare
 
-coming soon...
+For Rockchip 3588 and Rockchip 3576.
 
 # Install Docker
 
@@ -18,7 +18,7 @@ curl -fsSL https://get.docker.com -o get-docker.sh && sudo sh get-docker.sh
 
 # Start inference
 
-### LLM
+## LLM
 
 | Device | Model |
 |--------|-------|
@@ -28,8 +28,7 @@ curl -fsSL https://get.docker.com -o get-docker.sh && sudo sh get-docker.sh
 For example:
 
 ```bash
-sudo docker run -it --name deepseek-r1-1.5b-fp16 \
-  --privileged \
+sudo docker run -it --privileged \
   --net=host \
   --device /dev/dri \
   --device /dev/dma_heap \
@@ -41,7 +40,7 @@ sudo docker run -it --name deepseek-r1-1.5b-fp16 \
 
 >Note: When you start the service, you can access `http://localhost:8001/docs` and `http://localhost:8001/redoc` to view the documentation.
 
-### VLM
+## VLM
 
 | Device | Model |
 |--------|-------|
@@ -51,8 +50,7 @@ sudo docker run -it --name deepseek-r1-1.5b-fp16 \
 
 For example:
 ```bash
-sudo docker run -it --name qwen2.5-3b-w4a16-vl \
-  --privileged \
+sudo docker run -it --name --privileged \
   --net=host \
   --device /dev/dri \
   --device /dev/dma_heap \
@@ -420,7 +418,7 @@ if __name__ == "__main__":
 ```bash
 python -m venv .env && source .env/bin/activate
 pip install requests
-python test_inference_speed.py
+python llm_speed_test.py
 ```
 
 # 💞 Top contributors:
