@@ -49,8 +49,7 @@ curl -X POST http://localhost:8002/v1/chat/completions \
         ]
       }
     ],
-    "stream": false,
-    "max_tokens": 50
+    "stream": false
   }'
 
 ```
@@ -81,7 +80,6 @@ curl -X POST http://localhost:8002/v1/chat/completions \
       }
     ],
     "stream": true,
-    "max_tokens": 50
   }'
 ```
 ### Use OpenAI API
