@@ -28,7 +28,7 @@ Thumbs.db
 *.db
 
 # Environment variables
-.env
+.env/
 .env.local
 
 # Jupyter

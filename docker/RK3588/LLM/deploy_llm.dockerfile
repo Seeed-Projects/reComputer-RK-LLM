@@ -19,19 +19,8 @@ RUN chmod +x /app/fix_freq_rk3588.sh
 
 # --- 最终阶段 ---
 FROM base AS final
-ARG MODEL_URL
-ARG MODEL_FILE
-
-# 必须在这里重新下载或声明，因为 ARG 在不同阶段不共享
-RUN if [ -n "${MODEL_URL}" ]; then \
-    wget --progress=dot:giga "${MODEL_URL}" -O "/app/models/${MODEL_FILE}"; \
-    fi
 
 COPY ./src/llm/fastapi_server_llm.py /app/
 
-# 将 ARG 转为 ENV，这样 CMD 才能读取到
-ENV RKLLM_MODEL_PATH=/app/models/${MODEL_FILE}
-
 EXPOSE 8001
 
-CMD ["sh", "-c", "python3 /app/fastapi_server_llm.py --rkllm_model_path ${RKLLM_MODEL_PATH} --target_platform rk3588"]

@@ -21,7 +21,6 @@ COPY ./lib/librknnrt.so /usr/lib/librknnrt.so
 
 COPY ./src/fix_freq_rk3588.sh /app/fix_freq_rk3588.sh
 RUN chmod +x /app/fix_freq_rk3588.sh
-RUN bash /app/fix_freq_rk3588.sh
 
 # --- 最终阶段 ---
 FROM base AS final
