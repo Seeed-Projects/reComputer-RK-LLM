@@ -1,0 +1,94 @@
+name: Build and Push DeepseekOCR-RK3576 Series
+
+on:
+  push:
+    branches: [ main, master ]
+    paths:
+      - 'src/vlm/**'
+      - 'docker/RK3576/VLM/DeepseekOCR.dockerfile'
+      - '.github/workflows/RK3576-DeepseekOCR.yml'
+      - 'lib/**'
+  workflow_dispatch:
+  
+env:
+  REGISTRY: ghcr.io
+  IMAGE_BASE_NAME: ${{ github.repository_owner }}/RK3576-DeepseekOCR
+
+jobs:
+  build-and-push:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      packages: write
+
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - alias: "w4a16"
+            vision_file: "deepseekocr_vision_rk3576.rknn"
+            vision_url: "https://huggingface.co/JiahaoLi/DeepseekOCR-RK3576/resolve/main/deepseekocr_vision_rk3576.rknn"
+            llm_file: "deepseekocr_w4a16_rk3576.rkllm"
+            llm_url: "https://huggingface.co/JiahaoLi/DeepseekOCR-RK3576/resolve/main/deepseekocr_w4a16_rk3576.rkllm"
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+        with:
+          lfs: true
+
+      - name: Force LFS Pull
+        run: |
+          git lfs install
+          git lfs pull
+
+      - name: Free Disk Space
+        uses: jlumbroso/free-disk-space@main
+        with:
+          tool-cache: true
+          android: true
+          dotnet: true
+          large-packages: true
+          docker-images: true
+
+      - name: Set up QEMU
+        uses: docker/setup-qemu-action@v3
+        with:
+          platforms: arm64
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Log in to GHCR
+        uses: docker/login-action@v3
+        with:
+          registry: ${{ env.REGISTRY }}
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Extract metadata
+        id: meta
+        uses: docker/metadata-action@v5
+        with:
+          images: ${{ env.REGISTRY }}/${{ env.IMAGE_BASE_NAME }}
+          tags: |
+            type=raw,value=${{ matrix.alias }}-latest
+
+      - name: Build and push
+        uses: docker/build-push-action@v5
+        with:
+          context: .
+          file: ./docker/RK3576/VLM/DeepseekOCR.dockerfile
+          # 重要：不指定 target，确保所有指令被执行
+          push: true
+          platforms: linux/arm64
+          provenance: false
+          build-args: |
+            LLM_URL=${{ matrix.llm_url }}
+            LLM_FILE=${{ matrix.llm_file }}
+            VISION_URL=${{ matrix.vision_url }}
+            VISION_FILE=${{ matrix.vision_file }}
+          tags: ${{ steps.meta.outputs.tags }}
+          labels: ${{ steps.meta.outputs.labels }}
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
