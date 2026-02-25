@@ -8,7 +8,7 @@ This repository utilizes [Docker](https://www.docker.com/) to package large lang
 
 # Hardware Prepare
 
-For Rockchip 3588 and Rockchip 3576.
+For reComputer RK3588 and reComputer RK3576.
 
 ## LLM
 
