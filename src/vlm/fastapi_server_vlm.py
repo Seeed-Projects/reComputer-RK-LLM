@@ -70,7 +70,7 @@ class RKLLMService:
         self.encoder_model_path = None
         self.llm_model_path = None
         
-        # 用于管理流式回调的队列
+        # Queues for managing streaming callbacks
         self._callback_queues = {}
         self._callback_counter = 0
         
@@ -236,25 +236,25 @@ class RKLLMService:
             return result.decode('utf-8', errors='ignore') if result else ""
 
     def _create_streaming_callback(self, callback_id: int) -> ctypes.CFUNCTYPE:
-        """创建流式回调函数"""
+        """Create streaming callback function"""
         @self.streaming_callback_type
         def internal_callback(token_ptr: ctypes.c_char_p, userdata: ctypes.c_void_p) -> ctypes.c_int:
-            """内部回调函数，将token放入队列"""
+            """Internal callback that puts token into queue"""
             token = None
             if token_ptr:
                 try:
-                    # 解码token
+                    # Decode token
                     token_bytes = ctypes.string_at(token_ptr)
                     if token_bytes:
                         token = token_bytes.decode('utf-8', errors='ignore')
                 except:
                     token = None
             
-            # 将token放入队列
+            # Put token into queue
             if callback_id in self._callback_queues:
                 self._callback_queues[callback_id].put(token)
             
-            return 0  # 成功返回0
+            return 0  # success
         
         return internal_callback
 
@@ -264,21 +264,21 @@ class RKLLMService:
                                                        top_k: int = 1,
                                                        top_p: float = 1.0,
                                                        temperature: float = 0.7) -> Generator[str, None, None]:
-        """生成流式响应的生成器（带动态图像）"""
+        """Generator for streaming response (with dynamic image)"""
         with self.lock:
             if not self.ctx or not self.initialized:
                 raise RuntimeError("Service not initialized")
             
-            # 创建回调队列
+            # Create callback queue
             callback_id = self._callback_counter
             self._callback_counter += 1
             callback_queue = Queue()
             self._callback_queues[callback_id] = callback_queue
             
-            # 创建回调函数
+            # Create callback function
             c_callback = self._create_streaming_callback(callback_id)
             
-            # 创建线程来运行流式推理
+            # Create thread to run streaming inference
             def run_streaming():
                 try:
                     result = self.lib.generate_streaming_with_dynamic_image(
@@ -294,35 +294,35 @@ class RKLLMService:
                     )
                     
                     if result != 0:
-                        callback_queue.put(None)  # 发送结束信号
+                        callback_queue.put(None)  # send end signal
                 except Exception as e:
                     print(f"Streaming error: {e}")
-                    callback_queue.put(None)  # 发送结束信号
+                    callback_queue.put(None)  # send end signal
                 finally:
-                    # 确保发送结束信号
+                    # Ensure end signal is sent
                     if callback_id in self._callback_queues:
                         self._callback_queues[callback_id].put(None)
             
-            # 启动流式推理线程
+            # Start streaming inference thread
             streaming_thread = threading.Thread(target=run_streaming)
             streaming_thread.daemon = True
             streaming_thread.start()
             
-            # 从队列中获取token并生成
+            # Get tokens from queue and yield
             try:
                 while True:
-                    token = callback_queue.get(timeout=300)  # 5分钟超时
-                    if token is None:  # 结束信号
+                    token = callback_queue.get(timeout=300)  # 5 min timeout
+                    if token is None:  # end signal
                         break
-                    if token:  # 有效的token
+                    if token:  # valid token
                         yield token
             except Exception as e:
                 print(f"Queue error: {e}")
             finally:
-                # 清理
+                # Cleanup
                 if callback_id in self._callback_queues:
                     del self._callback_queues[callback_id]
-                # 等待线程结束
+                # Wait for thread to finish
                 streaming_thread.join(timeout=1)
 
     def generate_streaming_generator(self,
@@ -330,21 +330,21 @@ class RKLLMService:
                                     top_k: int = 1,
                                     top_p: float = 1.0,
                                     temperature: float = 0.7) -> Generator[str, None, None]:
-        """生成流式响应的生成器（不带图像）"""
+        """Generator for streaming response (without image)"""
         with self.lock:
             if not self.ctx or not self.initialized:
                 raise RuntimeError("Service not initialized")
             
-            # 创建回调队列
+            # Create callback queue
             callback_id = self._callback_counter
             self._callback_counter += 1
             callback_queue = Queue()
             self._callback_queues[callback_id] = callback_queue
             
-            # 创建回调函数
+            # Create callback function
             c_callback = self._create_streaming_callback(callback_id)
             
-            # 创建线程来运行流式推理
+            # Create thread to run streaming inference
             def run_streaming():
                 try:
                     result = self.lib.generate_streaming(
@@ -358,35 +358,35 @@ class RKLLMService:
                     )
                     
                     if result != 0:
-                        callback_queue.put(None)  # 发送结束信号
+                        callback_queue.put(None)  # send end signal
                 except Exception as e:
                     print(f"Streaming error: {e}")
-                    callback_queue.put(None)  # 发送结束信号
+                    callback_queue.put(None)  # send end signal
                 finally:
-                    # 确保发送结束信号
+                    # Ensure end signal is sent
                     if callback_id in self._callback_queues:
                         self._callback_queues[callback_id].put(None)
             
-            # 启动流式推理线程
+            # Start streaming inference thread
             streaming_thread = threading.Thread(target=run_streaming)
             streaming_thread.daemon = True
             streaming_thread.start()
             
-            # 从队列中获取token并生成
+            # Get tokens from queue and yield
             try:
                 while True:
-                    token = callback_queue.get(timeout=300)  # 5分钟超时
-                    if token is None:  # 结束信号
+                    token = callback_queue.get(timeout=300)  # 5 min timeout
+                    if token is None:  # end signal
                         break
-                    if token:  # 有效的token
+                    if token:  # valid token
                         yield token
             except Exception as e:
                 print(f"Queue error: {e}")
             finally:
-                # 清理
+                # Cleanup
                 if callback_id in self._callback_queues:
                     del self._callback_queues[callback_id]
-                # 等待线程结束
+                # Wait for thread to finish
                 streaming_thread.join(timeout=1)
 
     def update_runtime_params(self, max_new_tokens=None, max_context_len=None, rknn_core_num=None):
@@ -435,7 +435,7 @@ class RKLLMService:
             "llm_model": self.llm_model_path,
             "runtime_params": self.get_runtime_params(),
             "capabilities": {
-                "streaming": True,  # 我们总是支持流式
+                "streaming": True,  # always support streaming
                 "runtime_params": True
             }
         }
@@ -446,7 +446,7 @@ class RKLLMService:
             if self.ctx:
                 self.lib.cleanup_service(self.ctx)
                 self.initialized = False
-            # 清理所有回调队列
+            # Clear all callback queues
             self._callback_queues.clear()
 
     def __del__(self):
@@ -554,7 +554,7 @@ logger = logging.getLogger(__name__)
 
 # ==================== Helper Functions ====================
 def extract_user_content(messages: List[Message]) -> tuple[str, str]:
-    """提取用户内容和图片数据"""
+    """Extract user text content and image data from messages"""
     import base64
     import requests
     from io import BytesIO
@@ -574,36 +574,36 @@ def extract_user_content(messages: List[Message]) -> tuple[str, str]:
                     elif item.type == "image_url" and item.image_url:
                         url = item.image_url.url
                         
-                        # 处理base64格式
+                        # Handle base64 format
                         if url.startswith("data:image"):
                             parts = url.split(",")
                             if len(parts) > 1:
                                 image_data_b64 = parts[1]
                             else:
                                 image_data_b64 = url
-                        # 处理HTTP/HTTPS URL - 新增
+                        # Handle HTTP/HTTPS URL - new
                         elif url.startswith(("http://", "https://")):
                             try:
-                                logger.info(f"下载图片: {url}")
+                                logger.info(f"Downloading image: {url}")
                                 response = requests.get(url, timeout=30)
                                 response.raise_for_status()
                                 
-                                # 验证是否为图片
+                                # Verify it's an image
                                 content_type = response.headers.get('content-type', '')
                                 if not content_type.startswith('image/'):
-                                    logger.warning(f"URL返回的不是图片: {content_type}")
+                                    logger.warning(f"URL did not return an image: {content_type}")
                                 
-                                # 转换为base64
+                                # Convert to base64
                                 image_bytes = response.content
                                 image_data_b64 = base64.b64encode(image_bytes).decode('utf-8')
-                                logger.info(f"图片下载成功，base64长度: {len(image_data_b64)}")
+                                logger.info(f"Image downloaded successfully, base64 length: {len(image_data_b64)}")
                                 
                             except Exception as e:
-                                logger.error(f"下载图片失败 {url}: {e}")
+                                logger.error(f"Failed to download image {url}: {e}")
                                 image_data_b64 = None
                         else:
-                            # 可能是文件路径或其他
-                            logger.warning(f"无法识别的图片格式: {url}")
+                            # Possibly file path or other
+                            logger.warning(f"Unrecognized image format: {url}")
                             image_data_b64 = url
             break
     
@@ -800,10 +800,10 @@ async def create_chat_completion(request: ChatCompletionRequest):
         logger.info(f"[{request_id}] Processing request with {'image' if image_b64 else 'text only'}")
         
         if request.stream:
-            # 真正的流式响应
+            # Real streaming response
             async def generate_real_stream():
                 try:
-                    # 发送初始chunk（assistant角色）
+                    # Send initial chunk (assistant role)
                     initial_chunk = ChatCompletionStreamResponse(
                         id=request_id,
                         created=created,
@@ -818,9 +818,9 @@ async def create_chat_completion(request: ChatCompletionRequest):
                     )
                     yield f"data: {initial_chunk.model_dump_json(exclude_unset=True, ensure_ascii=False)}\n\n"
                     
-                    # 创建流式生成器
+                    # Create streaming generator
                     if image_b64:
-                        # 使用真正的流式推理
+                        # Use real streaming inference
                         def streaming_task():
                             try:
                                 generator = rkllm_service.generate_streaming_with_dynamic_image_generator(
@@ -838,7 +838,7 @@ async def create_chat_completion(request: ChatCompletionRequest):
                                 logger.error(f"[{request_id}] Streaming error: {e}")
                                 return f"[ERROR] {e}"
                     else:
-                        # 纯文本流式推理
+                        # Pure text streaming inference
                         def streaming_task():
                             try:
                                 generator = rkllm_service.generate_streaming_generator(
@@ -855,15 +855,15 @@ async def create_chat_completion(request: ChatCompletionRequest):
                                 logger.error(f"[{request_id}] Streaming error: {e}")
                                 return f"[ERROR] {e}"
                     
-                    # 在单独的线程中运行流式推理
+                    # Run streaming inference in a separate thread
                     future = executor.submit(streaming_task)
                     
-                    # 我们需要实时获取token，但上面的实现是收集所有token后再返回
-                    # 为了真正的流式，我们需要修改生成器以实时回调
-                    # 这里我们使用一个队列来实现实时token传递
+                    # We need to get tokens in real time, but the above implementation collects all tokens first
+                    # For true streaming, we need to modify the generator to use real-time callbacks
+                    # Here we use a queue to implement real-time token delivery
                     token_queue = Queue()
                     
-                    # 定义实时回调的生成器
+                    # Define real-time callback generator
                     def real_time_generator():
                         if image_b64:
                             for token in rkllm_service.generate_streaming_with_dynamic_image_generator(
@@ -882,22 +882,22 @@ async def create_chat_completion(request: ChatCompletionRequest):
                                 temperature=request.temperature
                             ):
                                 token_queue.put(token)
-                        token_queue.put(None)  # 结束信号
+                        token_queue.put(None)  # end signal
                     
-                    # 启动实时生成器线程
+                    # Start real-time generator thread
                     gen_thread = threading.Thread(target=real_time_generator)
                     gen_thread.daemon = True
                     gen_thread.start()
                     
-                    # 从队列中获取token并发送
+                    # Get tokens from queue and send
                     while True:
                         try:
-                            token = token_queue.get(timeout=300)  # 5分钟超时
-                            if token is None:  # 结束信号
+                            token = token_queue.get(timeout=300)  # 5 min timeout
+                            if token is None:  # end signal
                                 break
                             
                             if token:
-                                # 发送token chunk
+                                # Send token chunk
                                 data_chunk = ChatCompletionStreamResponse(
                                     id=request_id,
                                     created=created,
@@ -916,7 +916,7 @@ async def create_chat_completion(request: ChatCompletionRequest):
                             logger.error(f"[{request_id}] Token queue error: {e}")
                             break
                     
-                    # 发送完成chunk
+                    # Send completion chunk
                     done_chunk = ChatCompletionStreamResponse(
                         id=request_id,
                         created=created,
@@ -942,7 +942,7 @@ async def create_chat_completion(request: ChatCompletionRequest):
                 media_type="text/event-stream"
             )
         else:
-            # 非流式响应
+            # Non-streaming response
             def process_inference():
                 """Process inference in thread pool"""
                 try:

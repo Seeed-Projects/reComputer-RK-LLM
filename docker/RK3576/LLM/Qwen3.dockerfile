@@ -16,6 +16,7 @@ RUN pip install --no-cache-dir -r /app/requirements.txt
 COPY ./lib/librkllmrt.so /usr/lib/librkllmrt.so 
 COPY ./src/fix_freq_rk3576.sh /app/fix_freq_rk3576.sh
 RUN chmod +x /app/fix_freq_rk3576.sh
+RUN bash /app/fix_freq_rk3576.sh
 
 # --- 最终阶段 ---
 FROM base AS final
