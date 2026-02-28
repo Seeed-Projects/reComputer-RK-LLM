@@ -13,7 +13,6 @@ on:
       - 'lib/**'
   workflow_dispatch:
 
-# Grant necessary permissions to push packages to GHCR
 permissions:
   contents: read
   packages: write
@@ -47,7 +46,6 @@ jobs:
       - name: Set up Docker Buildx
         uses: docker/setup-buildx-action@v3
 
-      # Login to GitHub Container Registry
       - name: Log in to GHCR
         uses: docker/login-action@v3
         with:
@@ -55,17 +53,16 @@ jobs:
           username: ${{ github.actor }}
           password: ${{ secrets.GITHUB_TOKEN }}
 
-      # Generate image tags: 
-      #   - platform (e.g., rk3588)
-      #   - platform-commit-sha (e.g., rk3588-abc1234)
+      # Generate image tags:
+      #   Image name: ghcr.io/<owner>/deploy_<type>
+      #   Tags: <platform>-latest, <platform>-<short-sha>
       - name: Generate image tags
         id: meta
         run: |
-          # Convert repository name to lowercase (required by Docker registry)
-          REPO_LOWER=$(echo "${{ github.repository }}" | tr '[:upper:]' '[:lower:]')
-          IMAGE_NAME="ghcr.io/${REPO_LOWER}/deploy_${{ matrix.type }}"
+          OWNER_LOWER=$(echo "${{ github.repository_owner }}" | tr '[:upper:]' '[:lower:]')
+          IMAGE_NAME="ghcr.io/${OWNER_LOWER}/deploy_${{ matrix.type }}"
           SHORT_SHA=$(echo "${{ github.sha }}" | cut -c1-7)
-          TAGS="${IMAGE_NAME}:${{ matrix.platform }}"
+          TAGS="${IMAGE_NAME}:${{ matrix.platform }}-latest"
           TAGS="${TAGS},${IMAGE_NAME}:${{ matrix.platform }}-${SHORT_SHA}"
           echo "tags=${TAGS}" >> $GITHUB_OUTPUT
 
