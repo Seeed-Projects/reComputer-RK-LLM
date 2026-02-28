@@ -2,10 +2,16 @@ name: Build and Push Deploy Images
 
 on:
   push:
-    branches: [ main ]
-    tags: [ 'v*' ]
-  pull_request:
-    branches: [ main ]
+    branches: [ main, master ]
+    paths:
+      - 'src/**'
+      - 'docker/RK3576/VLM/deploy_llm.dockerfile'
+      - 'docker/RK3576/LLM/deploy_llm.dockerfile'
+      - 'docker/RK3588/VLM/deploy_vlm.dockerfile'
+      - 'docker/RK3588/LLM/deploy_llm.dockerfile'
+      - '.github/workflows/deploy.yml'
+      - 'lib/**'
+  workflow_dispatch:
 
 jobs:
   build:
