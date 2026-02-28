@@ -6,7 +6,6 @@ RUN apt-get update && \
     rm -rf /var/lib/apt/lists/*
 
 WORKDIR /app
-RUN mkdir -p /app/models
 
 # 安装依赖
 COPY ./src/vlm/requirements.txt /app/requirements.txt

@@ -13,6 +13,11 @@ on:
       - 'lib/**'
   workflow_dispatch:
 
+# Grant necessary permissions to push packages to GHCR
+permissions:
+  contents: read
+  packages: write
+
 jobs:
   build:
     runs-on: ubuntu-latest
@@ -22,19 +27,15 @@ jobs:
           - platform: rk3576
             type: llm
             dockerfile: docker/RK3576/LLM/deploy_llm.dockerfile
-            image_suffix: llm-rk3576
           - platform: rk3576
             type: vlm
             dockerfile: docker/RK3576/VLM/deploy_vlm.dockerfile
-            image_suffix: vlm-rk3576
           - platform: rk3588
             type: llm
             dockerfile: docker/RK3588/LLM/deploy_llm.dockerfile
-            image_suffix: llm-rk3588
           - platform: rk3588
             type: vlm
             dockerfile: docker/RK3588/VLM/deploy_vlm.dockerfile
-            image_suffix: vlm-rk3588
 
     steps:
       - name: Checkout repository
@@ -46,25 +47,25 @@ jobs:
       - name: Set up Docker Buildx
         uses: docker/setup-buildx-action@v3
 
-      - name: Log in to Docker Hub
+      # Login to GitHub Container Registry
+      - name: Log in to GHCR
         uses: docker/login-action@v3
         with:
-          registry: ${{ env.REGISTRY }}
+          registry: ghcr.io
           username: ${{ github.actor }}
           password: ${{ secrets.GITHUB_TOKEN }}
 
+      # Generate image tags: 
+      #   - platform (e.g., rk3588)
+      #   - platform-commit-sha (e.g., rk3588-abc1234)
       - name: Generate image tags
         id: meta
         run: |
-          IMAGE_NAME="yourusername/deploy-${{ matrix.image_suffix }}"
-          TAGS="${IMAGE_NAME}:latest"
-          if [[ "${{ github.ref }}" == refs/tags/* ]]; then
-            TAG_VERSION="${GITHUB_REF#refs/tags/}"
-            TAGS="${TAGS},${IMAGE_NAME}:${TAG_VERSION}"
-          else
-            SHORT_SHA=$(echo ${{ github.sha }} | cut -c1-7)
-            TAGS="${TAGS},${IMAGE_NAME}:${SHORT_SHA}"
-          fi
+          # Use repository name as part of the image path: ghcr.io/OWNER/REPO/deploy_<type>
+          IMAGE_NAME="ghcr.io/${{ github.repository }}/deploy_${{ matrix.type }}"
+          SHORT_SHA=$(echo "${{ github.sha }}" | cut -c1-7)
+          TAGS="${IMAGE_NAME}:${{ matrix.platform }}"
+          TAGS="${TAGS},${IMAGE_NAME}:${{ matrix.platform }}-${SHORT_SHA}"
           echo "tags=${TAGS}" >> $GITHUB_OUTPUT
 
       - name: Build and push Docker image
