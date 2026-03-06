@@ -34,4 +34,4 @@ ENV RKLLM_MODEL_PATH=/app/models/${MODEL_FILE}
 
 EXPOSE 8001
 
-CMD ["sh", "-c", "python3 /app/fastapi_server_llm.py --rkllm_model_path ${RKLLM_MODEL_PATH} --target_platform rk3588"]
+CMD ["sh", "-c", "bash /app/fix_freq_rk3588.sh && python3 /app/fastapi_server_llm.py --rkllm_model_path ${RKLLM_MODEL_PATH} --target_platform rk3588"]

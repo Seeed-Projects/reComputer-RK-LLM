@@ -22,6 +22,7 @@ COPY ./lib/librknnrt.so /usr/lib/librknnrt.so
 COPY ./src/fix_freq_rk3588.sh /app/fix_freq_rk3588.sh
 RUN chmod +x /app/fix_freq_rk3588.sh
 
+
 # --- 最终阶段 ---
 FROM base AS final
 ARG LLM_URL
@@ -50,4 +51,4 @@ ENV VISION_MODEL_PATH=/app/models/${VISION_FILE}
 
 EXPOSE 8002
 
-CMD ["sh", "-c", "python3 /app/fastapi_server_vlm.py --llm_model ${LLM_MODEL_PATH} --encoder_model ${VISION_MODEL_PATH}"]
+CMD ["sh", "-c", "bash /app/fix_freq_rk3588.sh && python3 /app/fastapi_server_vlm.py --llm_model ${LLM_MODEL_PATH} --encoder_model ${VISION_MODEL_PATH}"]

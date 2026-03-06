@@ -1,4 +1,4 @@
-# LLM Fast start
+# VLM Fast start
 
 ## Step 1: Install Docker
 
