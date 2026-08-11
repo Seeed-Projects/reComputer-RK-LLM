@@ -2,7 +2,7 @@
 """
 RKLLM Vision API Streaming Speed Test Tool
 Measures TTFT (Time To First Token) and TPOT (Time Per Output Token)
-Always includes an image (default image provided) and uses streaming mode only.
+Always includes an explicitly supplied image and uses streaming mode only.
 """
 
 import argparse
@@ -13,10 +13,7 @@ import requests
 import sys
 import numpy as np
 from pathlib import Path
-from typing import Optional, List, Dict, Any
-
-# Default image URL (raw GitHub link to a test image)
-DEFAULT_IMAGE_URL = "https://raw.githubusercontent.com/LJ-Hao/reComputer-RK-LLM/main/img/test.jpeg"
+from typing import List, Dict, Any
 
 def encode_image_file(image_path: str) -> str:
     """
@@ -39,15 +36,10 @@ def encode_image_file(image_path: str) -> str:
         mime = "image/jpeg"  # fallback
     return f"data:{mime};base64,{encoded}"
 
-def build_messages(text: str, image_source: Optional[str] = None) -> List[Dict[str, Any]]:
+def build_messages(text: str, image_source: str) -> List[Dict[str, Any]]:
     """
-    Construct the messages list. If no image_source is provided, use the default image URL.
-    Supports local file paths, HTTP/HTTPS URLs, or data URIs.
+    Construct the messages list from a local file, URL, or data URI.
     """
-    if image_source is None:
-        image_source = DEFAULT_IMAGE_URL
-        print(f"[Info] Using default image URL: {image_source}")
-
     # Determine if image_source is a local file or a URL/data URI
     if image_source.startswith(("http://", "https://", "data:image")):
         image_url = image_source
@@ -147,16 +139,16 @@ def test_streaming(url: str, model: str, messages: list,
 
 def main():
     parser = argparse.ArgumentParser(
-        description="Streaming speed test for RKLLM Vision API (always includes an image)."
+        description="Streaming speed test for RKLLM Vision API."
     )
-    parser.add_argument("--url", type=str, default="http://localhost:8002/v1/chat/completions",
-                        help="API endpoint URL (default: http://localhost:8002/v1/chat/completions)")
+    parser.add_argument("--url", type=str, default="http://localhost:8001/v1/chat/completions",
+                        help="API endpoint URL (default: http://localhost:8001/v1/chat/completions)")
     parser.add_argument("--model", type=str, default="rkllm-vision",
                         help="Model name (default: rkllm-vision)")
     parser.add_argument("--message", type=str, default='Describe this image',
                         help="User message text")
-    parser.add_argument("--image", type=str, default=None,
-                        help="Image file path, URL, or data URI. If not provided, a default image is used.")
+    parser.add_argument("--image", type=str, required=True,
+                        help="Image file path, URL, or data URI.")
     parser.add_argument("--temperature", type=float, default=0.7,
                         help="Temperature parameter (default: 0.7)")
     parser.add_argument("--top_p", type=float, default=1.0,
@@ -170,17 +162,14 @@ def main():
 
     args = parser.parse_args()
 
-    # Build messages (always includes an image)
+    # Build messages (always includes an explicitly supplied image)
     messages = build_messages(args.message, args.image)
 
     print("=" * 60)
     print(f"Request URL: {args.url}")
     print(f"Model: {args.model}")
     print(f"Message: {args.message[:50]}{'...' if len(args.message)>50 else ''}")
-    if args.image:
-        print(f"Image: {args.image}")
-    else:
-        print(f"Image: default (override with --image)")
+    print(f"Image: {args.image}")
     print(f"Streaming: True")
     print(f"temperature: {args.temperature}, top_p: {args.top_p}, max_tokens: {args.max_tokens}")
     print("=" * 60)

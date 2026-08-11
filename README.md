@@ -1,65 +1,103 @@
-[![Contributors][contributors-shield]][contributors-url]
-[![Forks][forks-shield]][forks-url]
-[![Stargazers][stars-shield]][stars-url]
-[![Issues][issues-shield]][issues-url]
-[![MIT License][license-shield]][license-url]
-# Introduction
-This repository utilizes [Docker](https://www.docker.com/) to package large language models and multimodal models optimized for Rockchip platforms. It provides a unified calling interface that is compatible with the OpenAI API, making it easy for users to integrate and use these models.
+# RKLLM Docker
 
-# Hardware Prepare
+Docker images for running pre-converted RKLLM LLM and VLM models on Rockchip
+RK3576 and RK3588-family boards through OpenAI- and Ollama-compatible APIs.
 
-For reComputer RK3588 and reComputer RK3576.
+The project now follows a two-layer image design:
 
-## LLM
-
-[Fast start](./LLM.md)
-
-| Device | Model |
-|--------|-------|
-| **RK3588** | [rk3588-deepseek-r1-distill-qwen:7b-w8a8-latest](https://github.com/Seeed-Projects/reComputer-RK-LLM/pkgs/container/rk3588-deepseek-r1-distill-qwen/682844605?tag=7b-w8a8-latest)<br>[rk3588-deepseek-r1-distill-qwen:1.5b-fp16-latest](https://github.com/Seeed-Projects/reComputer-RK-LLM/pkgs/container/rk3588-deepseek-r1-distill-qwen/682838759?tag=1.5b-fp16-latest)<br>[rk3588-deepseek-r1-distill-qwen:1.5b-w8a8-latest](https://github.com/Seeed-Projects/reComputer-RK-LLM/pkgs/container/rk3588-deepseek-r1-distill-qwen/682835173?tag=1.5b-w8a8-latest) <br>[rk3588-qwen3:1.7b-w8a8-latest](https://github.com/Seeed-Projects/reComputer-RK-LLM/pkgs/container/rk3588-qwen3/720583595?tag=1.7b-w8a8-latest)<br>[rk3588-qwen3:4b-w8a8-latest](https://github.com/Seeed-Projects/reComputer-RK-LLM/pkgs/container/rk3588-qwen3/720576830?tag=4b-w8a8-latest)<br>[rk3588-qwen3:0.6b-w8a8-latest](https://github.com/Seeed-Projects/reComputer-RK-LLM/pkgs/container/rk3588-qwen3/720570948?tag=0.6b-w8a8-latest)<br>[rk3588-gemma3:4b-w8a8-latest](https://github.com/Seeed-Projects/reComputer-RK-LLM/pkgs/container/rk3588-gemma3/720577321?tag=4b-w8a8-latest)| 
-| **RK3576** | [rk3576-deepseek-r1-distill-qwen:7b-w4a16-g128-latest](https://github.com/Seeed-Projects/reComputer-RK-LLM/pkgs/container/rk3576-deepseek-r1-distill-qwen/682837577?tag=7b-w4a16-g128-latest)<br>[rk3576-deepseek-r1-distill-qwen:7b-w4a16-latest](https://github.com/Seeed-Projects/reComputer-RK-LLM/pkgs/container/rk3576-deepseek-r1-distill-qwen/682832575?tag=1.5b-w4a16-latest)<br>[rk3576-deepseek-r1-distill-qwen:1.5b-fp16-latest](https://github.com/Seeed-Projects/reComputer-RK-LLM/pkgs/container/rk3576-deepseek-r1-distill-qwen/682834349?tag=1.5b-fp16-latest)<br>[rk3576-deepseek-r1-distill-qwen:1.5b-w4a16-g128-latest](https://github.com/Seeed-Projects/reComputer-RK-LLM/pkgs/container/rk3576-deepseek-r1-distill-qwen/682832500?tag=1.5b-w4a16-g128-latest)<br>[rk3576-deepseek-r1-distill-qwen:1.5b-w4a16-latest](https://github.com/Seeed-Projects/reComputer-RK-LLM/pkgs/container/rk3576-deepseek-r1-distill-qwen/682832575?tag=1.5b-w4a16-latest)<br>[rk3576-qwen3:4b-w4a16-latest](https://github.com/Seeed-Projects/reComputer-RK-LLM/pkgs/container/rk3576-qwen3/720570627?tag=4b-w4a16-latest)<br>[rk3576-qwen3:1.7b-w4a16-latest](https://github.com/Seeed-Projects/reComputer-RK-LLM/pkgs/container/rk3576-qwen3/720570521?tag=1.7b-w4a16-latest)<br>[rk3576-qwen3:4b-w4a16-g128-latest](https://github.com/Seeed-Projects/reComputer-RK-LLM/pkgs/container/rk3576-qwen3/720570453?tag=4b-w4a16-g128-latest)<br>[rk3576-qwen3:1.7b-w4a16-g128-latest](https://github.com/Seeed-Projects/reComputer-RK-LLM/pkgs/container/rk3576-qwen3/720569807?tag=1.7b-w4a16-g128-latest)<br>[rk3576-qwen3:0.6b-w4a16-latest](https://github.com/Seeed-Projects/reComputer-RK-LLM/pkgs/container/rk3576-qwen3/720568995?tag=0.6b-w4a16-latest) | 
-
-## VLM
-
-[Fast start](./VLM.md)
-
-| Device | Model |
-|--------|-------|
-| **RK3588** | [rk3588-qwen2-vl:7b-w8a8-latest](https://github.com/Seeed-Projects/reComputer-RK-LLM/pkgs/container/rk3588-qwen2-vl/682842044?tag=7b-w8a8-latest)<br>[rk3588-qwen2-vl:2b-w8a8-latest](https://github.com/Seeed-Projects/reComputer-RK-LLM/pkgs/container/rk3588-qwen2-vl/682835375?tag=2b-w8a8-latest)<br>[rk3588-qwen3-vl:4b-instruct_w8a8-latest](https://github.com/Seeed-Projects/reComputer-RK-LLM/pkgs/container/rk3588-qwen3-vl/720572517?tag=4b-Instruct_w8a8-latest)<br>[rk3588-qwen3-vl:2b-Instruct_w8a8-latest](https://github.com/Seeed-Projects/reComputer-RK-LLM/pkgs/container/rk3588-qwen3-vl/720570896?tag=2b-Instruct_w8a8-latest)<br>[rk3588-qwen2-vl:7b-w8a8-latest](https://github.com/Seeed-Projects/reComputer-RK-LLM/pkgs/container/rk3588-qwen2-vl/720580702?tag=7b-w8a8-latest)<br>[rk3588-qwen2-vl:2b-w8a8-latest](https://github.com/Seeed-Projects/reComputer-RK-LLM/pkgs/container/rk3588-qwen2-vl/720573109?tag=2b-w8a8-latest)<br>[rk3588-qwen2.5-vl:3b-w8a8-latest](https://github.com/Seeed-Projects/reComputer-RK-LLM/pkgs/container/rk3588-qwen2.5-vl/720572920?tag=3b-w8a8-latest)<br>[rk3588-deepseekocr:w8a8-latest](https://github.com/Seeed-Projects/reComputer-RK-LLM/pkgs/container/rk3588-deepseekocr/720574339?tag=w8a8-latest)<br>[rk3588-internvl3:1b-w8a8-latest](https://github.com/Seeed-Projects/reComputer-RK-LLM/pkgs/container/rk3588-internvl3/720572739?tag=1b-w8a8-latest) | 
-| **RK3576** | [rk3576-qwen2.5-vl:3b-w4a16-latest](https://github.com/Seeed-Projects/reComputer-RK-LLM/pkgs/container/rk3576-qwen2.5-vl/682834538?tag=3b-w4a16-latest)<br>[rk3576-qwen2.5-vl:3b-w4a16-latest](https://github.com/Seeed-Projects/reComputer-RK-LLM/pkgs/container/rk3576-qwen2.5-vl/720573164?tag=3b-w4a16-latest)<br>[rk3576-qwen3-vl:3b-Instruct_w4a16_g128-latest](https://github.com/Seeed-Projects/reComputer-RK-LLM/pkgs/container/rk3576-qwen3-vl/720578365?tag=3b-Instruct_w4a16_g128-latest)<br>[rk3576-qwen3-vl:2b-Instruct_w4a16_g128-latest](https://github.com/Seeed-Projects/reComputer-RK-LLM/pkgs/container/rk3576-qwen3-vl/720576257?tag=2b-Instruct_w4a16_g128-latest)<br>[rk3576-deepseekocr:w4a16-latest](https://github.com/Seeed-Projects/reComputer-RK-LLM/pkgs/container/rk3576-deepseekocr/720572841?tag=w4a16-latest)<br>[rk3576-internvl3:1b-w4a16-g128-latest](https://github.com/Seeed-Projects/reComputer-RK-LLM/pkgs/container/rk3576-internvl3/720569512?tag=1b-w4a16-g128-latest)| 
-
-
-# Speed test
-
-> Note: A rough estimate of a model's inference speed includes both TTFT and TPOT.
-> Note: You can use `python test_inference_speed.py --help` to view the help function.
-
-```bash
-python -m venv .env && source .env/bin/activate
-pip install requests
-python llm_speed_test.py
+```text
+runtime/ + app/ + scripts/  ->  environment image  ->  model image
 ```
 
-# 💞 Top contributors:
+The environment image contains the pinned ARM64 RKLLM/RKNN runtimes and API
+servers. Model images add only the selected `.rkllm` and optional `.rknn`
+artifacts. Custom models can use the environment image directly by mounting
+their files.
 
-<a href="https://github.com/Seeed-Projects/reComputer-RK-LLM/graphs/contributors">
-  <img src="https://contrib.rocks/image?repo=Seeed-Projects/reComputer-RK-LLM" alt="contrib.rocks image" />
-</a>
+Deployment guides: [LLM](docs/LLM.md) · [VLM](docs/VLM.md)
 
-# 🌟 Star History
+## Runtime
 
-![Star History Chart](https://api.star-history.com/svg?repos=Seeed-Projects/reComputer-RK-LLM&type=Date)
+The bundled RKLLM runtime is v1.3.0. The ctypes definitions in
+`app/fastapi_server_llm.py` and `app/fastapi_server_vlm.py` match that ABI.
+Runtime artifacts are kept under [`runtime/`](runtime/).
 
-Reference: [rknn-llm](https://github.com/airockchip/rknn-llm/tree/main)
+## Quick start
 
+Build the environment image for the target board:
 
-[contributors-shield]: https://img.shields.io/github/contributors/Seeed-Projects/reComputer-RK-LLM.svg?style=for-the-badge
-[contributors-url]: https://github.com/Seeed-Projects/reComputer-RK-LLM/graphs/contributors
-[forks-shield]: https://img.shields.io/github/forks/Seeed-Projects/reComputer-RK-LLM.svg?style=for-the-badge
-[forks-url]: https://github.com/Seeed-Projects/reComputer-RK-LLM/network/members
-[stars-shield]: https://img.shields.io/github/stars/Seeed-Projects/reComputer-RK-LLM.svg?style=for-the-badge
-[stars-url]: https://github.com/Seeed-Projects/reComputer-RK-LLM/stargazers
-[issues-shield]: https://img.shields.io/github/issues/Seeed-Projects/reComputer-RK-LLM.svg?style=for-the-badge
-[issues-url]: https://github.com/Seeed-Projects/reComputer-RK-LLM/issues
-[license-shield]: https://img.shields.io/github/license/Seeed-Projects/reComputer-RK-LLM.svg?style=for-the-badge
-[license-url]: https://github.com/Seeed-Projects/reComputer-RK-LLM/blob/master/LICENSE.txt
+```bash
+docker buildx build --platform linux/arm64 \
+  -f docker/Dockerfile \
+  -t rkllm:env --load .
+```
+
+Run a custom LLM model:
+
+```bash
+sudo docker run --rm -d \
+  --name rkllm \
+  --privileged \
+  -p 8001:8001 \
+  -v /dev:/dev \
+  -v ./models:/app/models:ro \
+  -e MODEL_FILE=Qwen2.5-1.5B-Instruct_w8a8_RK3576.rkllm \
+  -e TARGET_PLATFORM=rk3576 \
+  rkllm:env
+```
+
+Check readiness and call the API:
+
+```bash
+curl http://localhost:8001/health
+curl http://localhost:8001/v1/chat/completions \
+  -H 'Content-Type: application/json' \
+  -d '{"model":"rkllm-model","messages":[{"role":"user","content":"Hello"}],"stream":false}'
+```
+
+For an image containing a model, build the shared environment first and then
+use `docker/Dockerfile.model` with `models/.build/` populated. The declarative
+model definitions under `models/llm/` and `models/vlm/` are consumed by the
+GitHub Actions workflow.
+
+## Configuration
+
+| Variable | Default | Purpose |
+| --- | --- | --- |
+| `MODEL_PATH` | `/app/models/model.rkllm` | Full model path |
+| `MODEL_FILE` | empty | Model filename under `/app/models` |
+| `MODEL_KIND` | `llm` | `llm` or `vlm` |
+| `VISION_MODEL_FILE` | empty | VLM `.rknn` filename |
+| `TARGET_PLATFORM` | `auto` | `rk3576`, `rk3588`, or `rk3588s` |
+| `RUN_FREQ_FIX` | `true` | Apply board frequency setup |
+| `PORT` | `8001` | HTTP port |
+| `API_MODEL_NAME` | `rkllm-model` | Public LLM model name |
+| `INTERACTIVE_CHAT` | `false` | Enable terminal chat for LLM |
+
+## Repository layout
+
+```text
+app/                         API servers
+runtime/lib/                 ARM64 RKLLM/RKNN shared libraries
+runtime/wheels/              ARM64 Python runtime wheels
+models/<kind>/<id>/<board>/  Model metadata and download URLs
+docker/Dockerfile            Reusable environment image
+docker/Dockerfile.model      Thin model image
+docker/entrypoint.sh         Runtime/model selection and validation
+scripts/                     Board frequency setup
+.github/workflows/           Consolidated environment/model builds
+docs/LLM.md                  LLM deployment guide
+docs/VLM.md                  VLM deployment guide
+tools/                       API performance test clients
+```
+
+## Safety
+
+The examples use `--privileged` and `-v /dev:/dev` because Rockchip NPU access
+varies by board image. Keep the service on a trusted network; authentication
+and TLS are not included.
+
+## References
+
+- [airockchip/rknn-llm](https://github.com/airockchip/rknn-llm)
+- [Hanzo-Huang/rkllm-docker](https://github.com/Hanzo-Huang/rkllm-docker/)
