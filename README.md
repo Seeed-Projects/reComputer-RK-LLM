@@ -38,29 +38,22 @@ Custom models can use the environment image directly by mounting their files.
 
 ## Quick start
 
-Build the shared environment image on the target board or with an ARM64
-Buildx builder:
+Run a published model image. This example starts the Qwen2.5 1.5B Instruct
+model for RK3576 with the `w8a8` quantization:
 
 ```bash
-docker buildx build --platform linux/arm64 \
-  -f docker/Dockerfile \
-  -t recomputer-rk-llm:env --load .
-```
-
-Run a custom LLM model. The model filename must match the file mounted under
-`/app/models`:
-
-```bash
-sudo docker run --rm -d \
+sudo docker run --rm -it \
   --name recomputer-rk-llm \
   --privileged \
   -p 8001:8001 \
   -v /dev:/dev \
-  -v ./models:/app/models:ro \
-  -e MODEL_FILE=Qwen2.5-1.5B-Instruct_RK3576_w8a8.rkllm \
-  -e TARGET_PLATFORM=rk3576 \
-  recomputer-rk-llm:env
+  ghcr.io/seeed-projects/recomputer-rk-llm/llm/qwen2.5-1.5b-instruct:rk3576-w8a8
 ```
+
+Choose another published image from [Available model definitions](#available-model-definitions).
+The image already contains the converted model and its matching runtime; use
+the [LLM guide](docs/LLM.md) or [VLM guide](docs/VLM.md) for custom model
+files and request examples.
 
 Check readiness and call the OpenAI-compatible API:
 
@@ -71,21 +64,42 @@ curl http://localhost:8001/v1/chat/completions \
   -d '{"model":"rkllm-model","messages":[{"role":"user","content":"Hello"}],"stream":false}'
 ```
 
-For a VLM, set `MODEL_KIND=vlm` and provide both `MODEL_FILE` and
+For a custom VLM, set `MODEL_KIND=vlm` and provide both `MODEL_FILE` and
 `VISION_MODEL_FILE`; see the [VLM guide](docs/VLM.md) for the complete request
 format.
+
+## Build locally
+
+To build the shared environment image on the target board or with an ARM64
+Buildx builder:
+
+```bash
+docker buildx build --platform linux/arm64 \
+  -f docker/Dockerfile \
+  -t recomputer-rk-llm:env --load .
+```
 
 ## Available model definitions
 
 The definitions under [`models/`](models/) are used by the **Build model
-images** GitHub Actions workflow. They currently cover:
+images** GitHub Actions workflow. Each row below is a separate model image;
+the values show the available quantization tags for each board:
 
-| Model family | Boards and quantizations |
-| --- | --- |
-| Qwen2.5 1.5B/3B Instruct | RK3576 `w4a16`, `w8a8`; RK3588 `w8a8` |
-| Qwen3 1.7B/4B | RK3576 `w4a16`, `w8a8`; RK3588 `w8a8` |
-| Gemma 3 4B IT | RK3576 `w4a16`, `w8a8`; RK3588 `w8a8` |
-| Qwen3.5 2B/4B VLM | RK3576 `w4a16-g128`, `w8a8`; RK3588 `w8a8` |
+| Type | Model | RK3576 | RK3588 |
+| --- | --- | --- | --- |
+| LLM | [Qwen2.5 1.5B Instruct](models/llm/qwen2.5-1.5b-instruct) | `w4a16`, `w8a8` | `w8a8` |
+| LLM | [Qwen2.5 3B Instruct](models/llm/qwen2.5-3b-instruct) | `w4a16`, `w8a8` | `w8a8` |
+| LLM | [Qwen3 1.7B](models/llm/qwen3-1.7b) | `w4a16`, `w8a8` | `w8a8` |
+| LLM | [Qwen3 4B](models/llm/qwen3-4b) | `w4a16`, `w8a8` | `w8a8` |
+| LLM | [Gemma 3 4B IT](models/llm/gemma-3-4b-it) | `w4a16`, `w8a8` | `w8a8` |
+| VLM | [Qwen3.5 2B](models/vlm/qwen3.5-2b) | `w4a16-g128`, `w8a8` | `w8a8` |
+| VLM | [Qwen3.5 4B](models/vlm/qwen3.5-4b) | `w4a16-g128`, `w8a8` | `w8a8` |
+
+Published image names follow this pattern:
+
+```text
+ghcr.io/seeed-projects/recomputer-rk-llm/<type>/<model-id>:<platform>-<quantization>
+```
 
 To build a published model image, run [Build RKLLM model images](https://github.com/Seeed-Projects/reComputer-RK-LLM/actions/workflows/build-model-images.yml)
 and select the desired scope, model, platform, and quantization.
