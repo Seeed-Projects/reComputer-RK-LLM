@@ -22,7 +22,7 @@ docker buildx build --platform linux/arm64 \
 ```
 
 ```bash
-sudo docker run --rm -d --name rkllm-vlm --privileged \
+sudo docker run --rm -it --name rkllm-vlm --privileged \
   -p 8001:8001 \
   -v /dev:/dev \
   -v ./models:/app/models:ro \
@@ -32,6 +32,9 @@ sudo docker run --rm -d --name rkllm-vlm --privileged \
   -e TARGET_PLATFORM=rk3576 \
   rkllm:env
 ```
+
+The command stays attached to the terminal for testing. VLM interaction is
+available through the HTTP API; this server does not provide terminal chat.
 
 After startup, API documentation is available at `http://localhost:8001/docs`
 and `http://localhost:8001/redoc`.

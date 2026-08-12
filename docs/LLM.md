@@ -6,7 +6,7 @@ Ollama-compatible endpoints.
 ## Run a custom model
 
 ```bash
-sudo docker run --rm -d \
+sudo docker run --rm -it \
   --name rkllm \
   --privileged \
   -p 8001:8001 \
@@ -14,12 +14,13 @@ sudo docker run --rm -d \
   -v ./models:/app/models:ro \
   -e MODEL_FILE=Qwen2.5-1.5B-Instruct_RK3576_w8a8.rkllm \
   -e TARGET_PLATFORM=rk3576 \
+  -e INTERACTIVE_CHAT=true \
+  -e LOG_LEVEL=warning \
   rkllm:env
 ```
 
-The API-only mode is the default. For terminal chat instead, run interactively
-with `-it` and set `INTERACTIVE_CHAT=true`. The server waits until the model
-initializes and then reports readiness at:
+This test command stays attached to the terminal and enables terminal chat. The
+server waits until the model initializes and then reports readiness at:
 
 ```text
 http://localhost:8001/health

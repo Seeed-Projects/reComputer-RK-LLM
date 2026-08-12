@@ -47,6 +47,21 @@ sudo docker run --rm -it \
   --privileged \
   -p 8001:8001 \
   -v /dev:/dev \
+  -e INTERACTIVE_CHAT=true \
+  -e LOG_LEVEL=warning \
+  ghcr.io/seeed-projects/recomputer-rk-llm/llm/qwen2.5-1.5b-instruct:rk3576-w8a8
+```
+
+The command stays attached to the terminal and enables interactive chat for
+testing. If you want to run the same service in the background, use this
+command instead:
+
+```bash
+sudo docker run --rm -d \
+  --name recomputer-rk-llm \
+  --privileged \
+  -p 8001:8001 \
+  -v /dev:/dev \
   ghcr.io/seeed-projects/recomputer-rk-llm/llm/qwen2.5-1.5b-instruct:rk3576-w8a8
 ```
 
