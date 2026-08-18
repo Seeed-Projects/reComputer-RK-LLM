@@ -104,9 +104,15 @@ the values show the available quantization tags for each board:
 | --- | --- | --- | --- |
 | LLM | [Qwen2.5 1.5B Instruct](models/llm/qwen2.5-1.5b-instruct) | `w4a16`, `w8a8` | `w8a8` |
 | LLM | [Qwen2.5 3B Instruct](models/llm/qwen2.5-3b-instruct) | `w4a16`, `w8a8` | `w8a8` |
-| LLM | [Qwen3 1.7B](models/llm/qwen3-1.7b) | `w4a16`, `w8a8` | `w8a8` |
-| LLM | [Qwen3 4B](models/llm/qwen3-4b) | `w4a16`, `w8a8` | `w8a8` |
+| LLM | [Qwen2 0.5B Instruct](models/llm/qwen2-0.5b-instruct) | `w4a16-g128`, `w8a8` | `w8a8` |
+| LLM | [Qwen3 1.7B](models/llm/qwen3-1.7b) | `w4a16`, `w4a16-g128`, `w8a8` | `w8a8` |
+| LLM | [Qwen3 4B](models/llm/qwen3-4b) | `w4a16`, `w4a16-g128`, `w8a8` | `w8a8` |
+| LLM | [Gemma 4 E2B IT](models/llm/gemma-4-e2b-it) | `w4a16-g128`, `w8a8` | `w8a8` |
 | LLM | [Gemma 3 4B IT](models/llm/gemma-3-4b-it) | `w4a16`, `w8a8` | `w8a8` |
+| LLM | [MiniCPM3 4B](models/llm/minicpm3-4b) | `w4a16-g128`, `w8a8` | `w8a8` |
+| LLM | [MiniCPM4 0.5B](models/llm/minicpm4-0.5b) | `w4a16-g128`, `w8a8` | `w8a8` |
+| LLM | [Llama 3.2 1B Instruct](models/llm/llama-3.2-1b-instruct) | `w4a16-g128`, `w8a8` | `w8a8` |
+| LLM | [Llama 3.2 3B Instruct](models/llm/llama-3.2-3b-instruct) | `w4a16-g128`, `w8a8` | `w8a8` |
 | VLM | [Qwen3.5 2B](models/vlm/qwen3.5-2b) | `w4a16-g128`, `w8a8` | `w8a8` |
 | VLM | [Qwen3.5 4B](models/vlm/qwen3.5-4b) | `w4a16-g128`, `w8a8` | `w8a8` |
 
