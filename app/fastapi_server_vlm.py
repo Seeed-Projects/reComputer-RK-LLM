@@ -23,6 +23,7 @@ import sys
 import threading
 import time
 import uuid
+from dataclasses import dataclass
 from contextlib import asynccontextmanager
 from concurrent.futures import ThreadPoolExecutor
 from typing import Any, Dict, List, Optional, Tuple, Union
@@ -37,8 +38,184 @@ from PIL import Image
 from pydantic import BaseModel, Field
 
 
-logging.basicConfig(level=logging.INFO, format="%(asctime)s - %(levelname)s - %(message)s")
-logger = logging.getLogger(__name__)
+@dataclass(frozen=True)
+class OutputDelta:
+    """One protocol-visible piece of generated output."""
+    channel: str
+    text: str
+
+
+class ThinkingStreamParser:
+    """Separate reasoning from the answer across arbitrary callback chunks."""
+
+    START_MARKERS = (
+        "<thinking>",
+        "<think>",
+        "Thinking Process:",
+        "Okay, so I need",
+        "Okay, I need",
+        "Let me think",
+        "Let's think",
+        "The user wants",
+        "I need to",
+        "Let's analyze",
+        "We need to",
+    )
+    UNMARKED_START_MARKERS = (
+        "Okay, so I need",
+        "Okay, I need",
+        "Let me think",
+        "Let's think",
+        "The user wants",
+        "I need to",
+        "Let's analyze",
+        "We need to",
+    )
+    END_MARKERS = (
+        "</thinking>",
+        "</think>",
+        "Final Answer:",
+        "Final answer:",
+        "*Drafting the response:*",
+        "Drafting the response:",
+    )
+
+    def __init__(self, enabled: bool = False):
+        self.enabled = bool(enabled)
+        self.in_thinking = False
+        self._buffer = ""
+
+    @staticmethod
+    def _marker_at(text: str, start: int, markers: tuple[str, ...]) -> Optional[str]:
+        matches = [marker for marker in markers if text.startswith(marker, start)]
+        return max(matches, key=len) if matches else None
+
+    @staticmethod
+    def _partial_suffix(text: str, markers: tuple[str, ...]) -> str:
+        for size in range(min(len(text), max(map(len, markers))), 0, -1):
+            suffix = text[-size:]
+            if any(marker.startswith(suffix) for marker in markers):
+                return suffix
+        return ""
+
+    def feed(self, text: str) -> List[OutputDelta]:
+        if not text:
+            return []
+        self._buffer += text
+        deltas: List[OutputDelta] = []
+        while self._buffer:
+            markers = self.END_MARKERS if self.in_thinking else self.START_MARKERS + self.END_MARKERS
+            found = None
+            for index in range(len(self._buffer)):
+                marker = self._marker_at(self._buffer, index, markers)
+                if marker:
+                    found = (index, marker)
+                    break
+            if found:
+                index, marker = found
+                orphan_end = not self.in_thinking and marker in self.END_MARKERS
+                unmarked_start = (
+                    not self.in_thinking and marker in self.UNMARKED_START_MARKERS
+                )
+                channel = (
+                    "reasoning_content"
+                    if self.in_thinking or orphan_end or unmarked_start
+                    else "content"
+                )
+                value = self._buffer[:index]
+                if unmarked_start:
+                    value = marker + value
+                if value and (channel == "content" or self.enabled):
+                    deltas.append(OutputDelta(channel, value))
+                self._buffer = self._buffer[index + len(marker):]
+                self.in_thinking = (
+                    False
+                    if orphan_end
+                    else True
+                    if unmarked_start
+                    else not self.in_thinking
+                )
+                continue
+            markers_suffix = self._partial_suffix(self._buffer, markers)
+            value = self._buffer[:-len(markers_suffix)] if markers_suffix else self._buffer
+            channel = "reasoning_content" if self.in_thinking else "content"
+            if value and (channel == "content" or self.enabled):
+                deltas.append(OutputDelta(channel, value))
+            self._buffer = markers_suffix
+            break
+        return deltas
+
+    def finish(self) -> List[OutputDelta]:
+        if not self._buffer:
+            return []
+        channel = "reasoning_content" if self.in_thinking else "content"
+        value = self._buffer
+        self._buffer = ""
+        if channel == "reasoning_content" and not self.enabled:
+            return []
+        return [OutputDelta(channel, value)]
+
+
+def _thinking_enabled(
+    enable_thinking: Optional[bool] = None,
+    thinking: Optional[Union[bool, Dict[str, Any]]] = None,
+    reasoning_effort: Optional[str] = None,
+) -> bool:
+    if enable_thinking is not None:
+        return bool(enable_thinking)
+    if isinstance(thinking, bool):
+        return thinking
+    if isinstance(thinking, dict):
+        return str(thinking.get("type", "enabled")).lower() not in {
+            "disabled", "disable", "off", "none", "false"
+        }
+    if reasoning_effort is not None:
+        return str(reasoning_effort).lower() not in {"none", "off", "disabled", "false"}
+    return False
+
+
+def model_supports_reasoning(model_name: str) -> bool:
+    name = str(model_name).lower()
+    return any(family in name for family in ("qwen3", "qwen-3", "deepseek-r1", "deepseek_r1"))
+
+
+def model_supports_thinking(model_name: str) -> bool:
+    """Return whether RKLLM can switch thinking on/off for this model family."""
+    name = str(model_name).lower()
+    return any(family in name for family in ("qwen3", "qwen-3"))
+
+
+def runtime_max_tokens(model_name: str, requested: int, thinking: bool) -> int:
+    """Reserve hidden generation room for reasoning-only model artifacts."""
+    if model_supports_reasoning(model_name):
+        return min(4096, requested + max(512, requested * 2))
+    return requested
+
+
+LOG_LEVELS = ("critical", "error", "warning", "info", "debug")
+
+
+def normalize_log_level(value: str) -> str:
+    """Return a logging level accepted by both Python logging and Uvicorn."""
+    level = str(value).strip().lower()
+    if level == "warn":
+        level = "warning"
+    if level not in LOG_LEVELS:
+        valid_levels = ", ".join(LOG_LEVELS)
+        raise ValueError(f"invalid log level {value!r}; use one of: {valid_levels}")
+    return level
+
+
+try:
+    initial_log_level = normalize_log_level(os.environ.get("LOG_LEVEL", "info"))
+except ValueError:
+    initial_log_level = "info"
+
+logging.basicConfig(
+    level=getattr(logging, initial_log_level.upper()),
+    format="%(asctime)s | %(levelname)s | %(name)s | %(message)s",
+)
+logger = logging.getLogger("rkllm")
 
 
 def preload_libraries() -> None:
@@ -83,6 +260,7 @@ class ChatCompletionRequest(BaseModel):
     n: Optional[int] = Field(1, ge=1, le=10)
     stream: Optional[bool] = False
     max_tokens: Optional[int] = Field(512, ge=1, le=4096)
+    max_completion_tokens: Optional[int] = Field(None, ge=1, le=4096)
     presence_penalty: Optional[float] = Field(0.0, ge=-2.0, le=2.0)
     frequency_penalty: Optional[float] = Field(0.0, ge=-2.0, le=2.0)
     stop: Optional[List[str]] = None
@@ -93,6 +271,7 @@ class ChatCompletionRequest(BaseModel):
     enable_thinking: Optional[bool] = None
     reasoning_effort: Optional[str] = None
     thinking: Optional[Union[bool, Dict[str, Any]]] = None
+    repeat_penalty: Optional[float] = Field(1.1, ge=0.0, le=2.0)
 
 
 class UsageInfo(BaseModel):
@@ -101,9 +280,15 @@ class UsageInfo(BaseModel):
     total_tokens: int = 0
 
 
+class AssistantMessage(BaseModel):
+    role: str = "assistant"
+    content: str = ""
+    reasoning_content: Optional[str] = None
+
+
 class ChatCompletionResponseChoice(BaseModel):
     index: int
-    message: Message
+    message: AssistantMessage
     finish_reason: Optional[str] = "stop"
 
 
@@ -120,6 +305,7 @@ class ChatCompletionResponse(BaseModel):
 class DeltaMessage(BaseModel):
     role: Optional[str] = None
     content: Optional[str] = None
+    reasoning_content: Optional[str] = None
 
 
 class ChatCompletionStreamChoice(BaseModel):
@@ -493,12 +679,27 @@ class RKLLMInput(ctypes.Structure):
     ]
 
 
+class RKLLMSamplingParam(ctypes.Structure):
+    """Per-request sampling override introduced by RKLLM v1.3.0."""
+    _fields_ = [
+        ("top_k", ctypes.c_int32),
+        ("top_p", ctypes.c_float),
+        ("temperature", ctypes.c_float),
+        ("repeat_penalty", ctypes.c_float),
+        ("frequency_penalty", ctypes.c_float),
+        ("presence_penalty", ctypes.c_float),
+        ("mirostat", ctypes.c_int32),
+        ("mirostat_tau", ctypes.c_float),
+        ("mirostat_eta", ctypes.c_float),
+    ]
+
+
 class RKLLMInferParam(ctypes.Structure):
     _fields_ = [
         ("mode", ctypes.c_int),
         ("lora_params", ctypes.c_void_p),
         ("prompt_cache_params", ctypes.c_void_p),
-        ("sampling_params", ctypes.c_void_p),
+        ("sampling_params", ctypes.POINTER(RKLLMSamplingParam)),
         ("keep_history", ctypes.c_int),
         ("max_new_tokens", ctypes.c_int32),
     ]
@@ -528,13 +729,36 @@ class RKLLMCallback(ctypes.Structure):
 
 
 class InferenceState:
-    def __init__(self):
-        self.text_queue: List[str] = []
+    def __init__(self, thinking: bool = False):
+        self.text_queue: List[OutputDelta] = []
         self.full_response = ""
+        self.reasoning_response = ""
+        self.finish_reason = "stop"
         self.error: Optional[str] = None
         self.completed = threading.Event()
         self.lock = threading.Lock()
         self.start_time = time.time()
+        self.parser = ThinkingStreamParser(thinking)
+
+    def append_runtime_text(self, text: str) -> None:
+        for marker in ("<｜end▁of▁sentence｜>", "<|endoftext|>", "<|im_end|>"):
+            text = text.replace(marker, "")
+        for delta in self.parser.feed(text):
+            self.text_queue.append(delta)
+            if delta.channel == "reasoning_content":
+                self.reasoning_response += delta.text
+            else:
+                self.full_response += delta.text
+
+    def finish_output(self) -> None:
+        if self.parser.in_thinking:
+            self.finish_reason = "length"
+        for delta in self.parser.finish():
+            self.text_queue.append(delta)
+            if delta.channel == "reasoning_content":
+                self.reasoning_response += delta.text
+            else:
+                self.full_response += delta.text
 
 
 request_states: Dict[str, InferenceState] = {}
@@ -558,6 +782,8 @@ class RKLLMRuntime:
         self.lib = ctypes.CDLL("/usr/lib/librkllmrt.so", mode=ctypes.RTLD_GLOBAL)
         self.handle = ctypes.c_void_p()
         self.lock = threading.Lock()
+        self.config = config
+        self.platform = platform.lower()
         self._setup_signatures()
 
         self._callback = LLMResultCallbackType(self._callback_impl)
@@ -583,10 +809,13 @@ class RKLLMRuntime:
         params.mirostat = 0
         params.mirostat_tau = 5.0
         params.mirostat_eta = 0.1
-        params.skip_special_token = True
+        # Keep <think>/</think> markers visible to the protocol parser.
+        params.skip_special_token = False
         params.ignore_eos_token = False
         params.is_async = False
-        params.extend_param.base_domain_id = 0
+        params.extend_param.base_domain_id = (
+            1 if self.platform in {"rk3576", "rk3588", "rk3588s"} else 0
+        )
         params.extend_param.embed_flash = 0
         params.extend_param.enabled_cpus_num = 4
         params.extend_param.enabled_cpus_mask = 0xF0
@@ -630,12 +859,12 @@ class RKLLMRuntime:
             with state.lock:
                 if state_code == self.RKLLM_RUN_NORMAL and result_ptr and result_ptr.contents.text:
                     text = result_ptr.contents.text.decode("utf-8", errors="ignore")
-                    state.text_queue.append(text)
-                    state.full_response += text
+                    state.append_runtime_text(text)
                 elif state_code == self.RKLLM_RUN_ERROR:
                     state.error = "RKLLM runtime error"
                     state.completed.set()
                 elif state_code == self.RKLLM_RUN_FINISH:
+                    state.finish_output()
                     state.completed.set()
             return 0
         except Exception as error:
@@ -650,6 +879,13 @@ class RKLLMRuntime:
         image_width: int = 0,
         image_height: int = 0,
         enable_thinking: bool = False,
+        temperature: Optional[float] = None,
+        top_p: Optional[float] = None,
+        top_k: Optional[int] = None,
+        frequency_penalty: float = 0.0,
+        presence_penalty: float = 0.0,
+        repeat_penalty: float = 1.1,
+        max_tokens: Optional[int] = None,
     ) -> InferenceState:
         state = request_states[request_id]
         prompt_buffer = ctypes.create_string_buffer(prompt.encode("utf-8"))
@@ -685,9 +921,21 @@ class RKLLMRuntime:
         infer_params.mode = self.RKLLM_INFER_GENERATE
         infer_params.lora_params = None
         infer_params.prompt_cache_params = None
-        infer_params.sampling_params = None
+        sampling_params = RKLLMSamplingParam()
+        sampling_params.top_k = top_k or self.config.default_top_k
+        sampling_params.top_p = top_p if top_p is not None else self.config.default_top_p
+        sampling_params.temperature = (
+            temperature if temperature is not None else self.config.default_temperature
+        )
+        sampling_params.repeat_penalty = repeat_penalty
+        sampling_params.frequency_penalty = frequency_penalty
+        sampling_params.presence_penalty = presence_penalty
+        sampling_params.mirostat = 0
+        sampling_params.mirostat_tau = 5.0
+        sampling_params.mirostat_eta = 0.1
+        infer_params.sampling_params = ctypes.pointer(sampling_params)
         infer_params.keep_history = 0
-        infer_params.max_new_tokens = 0
+        infer_params.max_new_tokens = max_tokens or 0
 
         with self.lock:
             ret = self.lib.rkllm_run(
@@ -709,6 +957,7 @@ class RKLLMRuntime:
 
 class ServerConfig:
     def __init__(self):
+        self.model_name = os.environ.get("API_MODEL_NAME") or "rkllm-vision"
         self.encoder_model_path = ""
         self.llm_model_path = ""
         self.platform = "rk3588"
@@ -719,6 +968,7 @@ class ServerConfig:
         self.default_max_tokens = 512
         self.max_concurrent_requests = 1
         self.timeout_seconds = 300
+        self.host = "0.0.0.0"
         self.port = 8001
         self.rknn_core_num = 3
         self.img_start = "<|vision_start|>"
@@ -727,6 +977,15 @@ class ServerConfig:
 
 
 config = ServerConfig()
+
+
+def platform_npu_core_limit(platform: str) -> int:
+    """Return the available RKNN NPU core count for a supported platform."""
+    if platform == "rk3576":
+        return 2
+    if platform in {"rk3588", "rk3588s"}:
+        return 3
+    return 3
 
 
 def reserve_request_slot() -> None:
@@ -800,18 +1059,17 @@ def estimate_tokens(text: str) -> int:
 
 def thinking_enabled(request: ChatCompletionRequest) -> bool:
     """Normalize thinking controls used by OpenAI-compatible clients."""
-    if request.enable_thinking is not None:
-        return request.enable_thinking
-
-    if isinstance(request.thinking, bool):
-        return request.thinking
-    if isinstance(request.thinking, dict):
-        mode = str(request.thinking.get("type", "enabled")).lower()
-        return mode not in {"disabled", "off", "none"}
-
-    if request.reasoning_effort:
-        return request.reasoning_effort.lower() not in {"none", "off", "disabled"}
-    return False
+    enabled = _thinking_enabled(
+        request.enable_thinking, request.thinking, request.reasoning_effort
+    )
+    if (
+        request.enable_thinking is None
+        and request.thinking is None
+        and request.reasoning_effort is None
+        and model_supports_reasoning(config.llm_model_path)
+    ):
+        enabled = True
+    return enabled
 
 
 def execute_inference(
@@ -819,32 +1077,76 @@ def execute_inference(
     prompt: str,
     image_url: Optional[str],
     enable_thinking: bool = False,
+    temperature: Optional[float] = None,
+    top_p: Optional[float] = None,
+    top_k: Optional[int] = None,
+    frequency_penalty: float = 0.0,
+    presence_penalty: float = 0.0,
+    repeat_penalty: float = 1.1,
+    max_tokens: Optional[int] = None,
 ) -> InferenceState:
     state = request_states[request_id]
+    started = time.time()
     try:
         image_embeddings = None
         image_width = image_height = 0
         if image_url:
+            logger.info("[%s] loading image", request_id)
             image_bytes = load_image(image_url)
             image_embeddings = runtime.encoder.encode(image_bytes)
             image_width = runtime.encoder.width
             image_height = runtime.encoder.height
-        return runtime.llm.run(
+            logger.info(
+                "[%s] image encoded: bytes=%s size=%sx%s tokens=%s",
+                request_id,
+                len(image_bytes),
+                image_width,
+                image_height,
+                runtime.encoder.image_tokens,
+            )
+        result = runtime.llm.run(
             request_id,
             prompt,
             image_embeddings,
             image_width,
             image_height,
             enable_thinking=enable_thinking,
+            temperature=temperature,
+            top_p=top_p,
+            top_k=top_k,
+            frequency_penalty=frequency_penalty,
+            presence_penalty=presence_penalty,
+            repeat_penalty=repeat_penalty,
+            max_tokens=max_tokens,
         )
+        if result.error:
+            logger.error("[%s] request failed: %s", request_id, result.error)
+        else:
+            logger.info("[%s] request completed in %.2fs", request_id, time.time() - started)
+        return result
     except Exception as error:
         state.error = str(error)
         state.completed.set()
+        logger.exception("[%s] request failed", request_id)
         return state
 
 
-def openai_chunk(request_id: str, created: int, model: str, content: Optional[str] = None,
-                 role: Optional[str] = None, finish_reason: Optional[str] = None) -> str:
+def openai_chunk(
+    request_id: str,
+    created: int,
+    model: str,
+    content: Optional[str] = None,
+    reasoning_content: Optional[str] = None,
+    role: Optional[str] = None,
+    finish_reason: Optional[str] = None,
+) -> str:
+    delta_data: Dict[str, str] = {}
+    if role is not None:
+        delta_data["role"] = role
+    if content is not None:
+        delta_data["content"] = content
+    if reasoning_content is not None:
+        delta_data["reasoning_content"] = reasoning_content
     chunk = ChatCompletionStreamResponse(
         id=request_id,
         created=created,
@@ -852,7 +1154,7 @@ def openai_chunk(request_id: str, created: int, model: str, content: Optional[st
         choices=[
             ChatCompletionStreamChoice(
                 index=0,
-                delta=DeltaMessage(role=role, content=content),
+                delta=DeltaMessage(**delta_data),
                 finish_reason=finish_reason,
             )
         ],
@@ -863,12 +1165,31 @@ def openai_chunk(request_id: str, created: int, model: str, content: Optional[st
 async def stream_completion(request: ChatCompletionRequest, request_id: str, created: int,
                            prompt: str, image_url: Optional[str]):
     try:
+        logger.info(
+            "[%s] request started: stream=true messages=%s image=%s prompt_chars=%s max_tokens=%s",
+            request_id,
+            len(request.messages),
+            bool(image_url),
+            len(prompt),
+            request.max_tokens,
+        )
         executor.submit(
             execute_inference,
             request_id,
             prompt,
             image_url,
             thinking_enabled(request),
+            request.temperature,
+            request.top_p,
+            request.top_k,
+            request.frequency_penalty or 0.0,
+            request.presence_penalty or 0.0,
+            request.repeat_penalty or 1.1,
+            runtime_max_tokens(
+                config.llm_model_path,
+                request.max_completion_tokens or request.max_tokens,
+                enable_thinking,
+            ),
         )
         yield openai_chunk(request_id, created, request.model, role="assistant")
         last_activity = time.time()
@@ -880,22 +1201,40 @@ async def stream_completion(request: ChatCompletionRequest, request_id: str, cre
                     state.text_queue.clear()
                     completed = state.completed.is_set()
                     error = state.error
-                for text in pending:
-                    yield openai_chunk(request_id, created, request.model, content=text)
+                for delta in pending:
+                    yield openai_chunk(
+                        request_id,
+                        created,
+                        request.model,
+                        content=delta.text if delta.channel == "content" else None,
+                        reasoning_content=(
+                            delta.text if delta.channel == "reasoning_content" else None
+                        ),
+                    )
                     last_activity = time.time()
                 if completed:
                     if error:
                         yield f"data: {json.dumps({'error': {'message': error}})}\n\n"
                     else:
                         yield openai_chunk(
-                            request_id, created, request.model, finish_reason="stop"
+                            request_id,
+                            created,
+                            request.model,
+                            finish_reason=state.finish_reason,
                         )
                     yield "data: [DONE]\n\n"
                     break
             if time.time() - last_activity > config.timeout_seconds:
-                yield f"data: {json.dumps({'error': {'message': 'Inference timeout'}})}\n\n"
+                timeout_error = f"Inference timeout ({config.timeout_seconds}s)"
+                logger.error("[%s] streaming response timeout", request_id)
+                yield f"data: {json.dumps({'error': {'message': timeout_error}})}\n\n"
+                yield "data: [DONE]\n\n"
                 break
             await asyncio.sleep(0.05)
+    except Exception as error:
+        logger.exception("[%s] stream generation failed", request_id)
+        yield f"data: {json.dumps({'error': {'message': str(error)}})}\n\n"
+        yield "data: [DONE]\n\n"
     finally:
         request_states.pop(request_id, None)
         release_request_slot()
@@ -911,18 +1250,32 @@ async def lifespan(app: FastAPI):
     try:
         runtime = type("OfficialVLMRuntime", (), {})()
         encoder_core_num = config.rknn_core_num
-        if config.platform == "rk3576" and encoder_core_num > 2:
+        core_limit = platform_npu_core_limit(config.platform)
+        if encoder_core_num > core_limit:
             logger.warning(
-                "RK3576 exposes only 2 RKNN cores; clamping rknn_core_num=%s to 2",
+                "%s exposes only %s RKNN cores; clamping rknn_core_num=%s to %s",
+                config.platform,
+                core_limit,
                 encoder_core_num,
+                core_limit,
             )
-            encoder_core_num = 2
+            encoder_core_num = core_limit
         runtime.encoder = RKNNImageEncoder(config.encoder_model_path, encoder_core_num)
         runtime.llm = RKLLMRuntime(config.llm_model_path, config.platform, config)
-        logger.info("VLM initialized using official librknnrt.so + librkllmrt.so")
-        logger.info("OpenAI API: http://127.0.0.1:%s/v1", config.port)
+        logger.info(
+            "API ready: model=%s platform=%s vision_cores=%s",
+            config.model_name,
+            config.platform,
+            encoder_core_num,
+        )
+        # Show the bind address in startup logs.  For Docker this is normally
+        # 0.0.0.0, which makes it clear the service listens on all interfaces.
+        display_host = config.host
+        logger.info("OpenAI API: http://%s:%s/v1", display_host, config.port)
+        logger.info("API docs: http://%s:%s/docs", display_host, config.port)
         yield
     finally:
+        logger.info("Shutting down VLM server")
         request_states.clear()
         if executor:
             executor.shutdown(wait=False)
@@ -980,25 +1333,38 @@ async def health_check():
 
 @app.get("/v1/models")
 async def list_models():
+    reasoning_supported = model_supports_reasoning(config.llm_model_path)
+    thinking_supported = model_supports_thinking(config.llm_model_path)
     return {
         "object": "list",
         "data": [{
-            "id": "rkllm-vision",
+            "id": config.model_name,
             "object": "model",
             "created": int(time.time()),
             "owned_by": "rockchip",
             # These are optional vendor metadata fields. Standard OpenAI
             # clients ignore unknown fields; clients such as Cherry Studio
             # can use them when capability discovery is supported.
-            "capabilities": ["vision", "reasoning", "thinking"],
+            "capabilities": (
+                ["vision"]
+                + (["reasoning"] if reasoning_supported else [])
+                + (["thinking"] if thinking_supported else [])
+            ),
             "input_modalities": ["text", "image"],
             "output_modalities": ["text"],
-            "reasoning": {"supported": True},
+            "reasoning": {
+                "supported": reasoning_supported,
+                "thinking_control": thinking_supported,
+            },
         }],
     }
 
 
-@app.post("/v1/chat/completions")
+@app.post(
+    "/v1/chat/completions",
+    response_model=ChatCompletionResponse,
+    response_model_exclude_none=True,
+)
 async def create_chat_completion(request: ChatCompletionRequest):
     if runtime is None:
         raise HTTPException(status_code=503, detail="VLM runtime is not initialized")
@@ -1010,7 +1376,15 @@ async def create_chat_completion(request: ChatCompletionRequest):
     reserve_request_slot()
     request_id = f"chatcmpl-{uuid.uuid4().hex[:24]}"
     created = int(time.time())
-    request_states[request_id] = InferenceState()
+    request_states[request_id] = InferenceState(thinking=thinking_enabled(request))
+    logger.info(
+        "[%s] request accepted: stream=%s messages=%s image=%s model=%s",
+        request_id,
+        request.stream,
+        len(request.messages),
+        bool(image_url),
+        request.model,
+    )
 
     if request.stream:
         return StreamingResponse(
@@ -1027,11 +1401,22 @@ async def create_chat_completion(request: ChatCompletionRequest):
             prompt,
             image_url,
             thinking_enabled(request),
+            request.temperature,
+            request.top_p,
+            request.top_k,
+            request.frequency_penalty or 0.0,
+            request.presence_penalty or 0.0,
+            request.repeat_penalty or 1.1,
+            runtime_max_tokens(
+                config.llm_model_path,
+                request.max_completion_tokens or request.max_tokens,
+                thinking_enabled(request),
+            ),
         )
         if state.error:
             raise HTTPException(status_code=500, detail=state.error)
         prompt_tokens = estimate_tokens(prompt)
-        completion_tokens = estimate_tokens(state.full_response)
+        completion_tokens = estimate_tokens(state.full_response + state.reasoning_response)
         return ChatCompletionResponse(
             id=request_id,
             created=created,
@@ -1039,8 +1424,15 @@ async def create_chat_completion(request: ChatCompletionRequest):
             choices=[
                 ChatCompletionResponseChoice(
                     index=0,
-                    message=Message(role="assistant", content=state.full_response),
-                    finish_reason="stop",
+                    message=AssistantMessage(
+                        content=state.full_response,
+                        **(
+                            {"reasoning_content": state.reasoning_response}
+                            if state.reasoning_response
+                            else {}
+                        ),
+                    ),
+                    finish_reason=state.finish_reason,
                 )
             ],
             usage=UsageInfo(
@@ -1052,6 +1444,7 @@ async def create_chat_completion(request: ChatCompletionRequest):
     except HTTPException:
         raise
     except Exception as error:
+        logger.exception("[%s] non-stream request failed", request_id)
         raise HTTPException(status_code=500, detail=str(error)) from error
     finally:
         request_states.pop(request_id, None)
@@ -1062,6 +1455,7 @@ if __name__ == "__main__":
     parser = argparse.ArgumentParser(description="Official-runtime RKLLM Vision OpenAI API server")
     parser.add_argument("--encoder_model", required=True, help="Vision encoder .rknn path")
     parser.add_argument("--llm_model", required=True, help="Multimodal language model .rkllm path")
+    parser.add_argument("--model_name", default=os.environ.get("API_MODEL_NAME") or "rkllm-vision")
     parser.add_argument("--target_platform", choices=["rk3576", "rk3588", "rk3588s", "rk3562", "rv1126b"], default="rk3588")
     parser.add_argument("--port", type=int, default=8001)
     parser.add_argument("--host", default="0.0.0.0")
@@ -1072,19 +1466,31 @@ if __name__ == "__main__":
     parser.add_argument("--default_max_tokens", type=int, default=512)
     parser.add_argument("--max_concurrent", type=int, default=1)
     parser.add_argument("--timeout", type=int, default=300)
-    parser.add_argument("--rknn_core_num", type=int, default=3)
+    parser.add_argument("--rknn_core_num", type=int, default=None)
     parser.add_argument("--img_start", default="<|vision_start|>")
     parser.add_argument("--img_end", default="<|vision_end|>")
     parser.add_argument("--img_content", default="<|image_pad|>")
     parser.add_argument("--debug", action="store_true")
+    parser.add_argument(
+        "--log_level",
+        default=initial_log_level,
+        choices=LOG_LEVELS,
+        help="Log level (default: LOG_LEVEL or info)",
+    )
     args = parser.parse_args()
+
+    effective_log_level = "debug" if args.debug else normalize_log_level(args.log_level)
+    numeric_log_level = getattr(logging, effective_log_level.upper())
+    logging.getLogger().setLevel(numeric_log_level)
+    logger.setLevel(numeric_log_level)
 
     for path, label in ((args.encoder_model, "encoder model"), (args.llm_model, "LLM model")):
         if not os.path.exists(path):
-            print(f"Error: {label} not found: {path}")
+            logger.error("%s not found: %s", label.capitalize(), path)
             sys.exit(1)
     config.encoder_model_path = os.path.abspath(args.encoder_model)
     config.llm_model_path = os.path.abspath(args.llm_model)
+    config.model_name = args.model_name
     config.platform = args.target_platform
     config.max_context_len = args.max_context_len
     config.default_temperature = args.default_temperature
@@ -1093,31 +1499,44 @@ if __name__ == "__main__":
     config.default_max_tokens = args.default_max_tokens
     config.max_concurrent_requests = args.max_concurrent
     config.timeout_seconds = args.timeout
+    config.host = args.host
     config.port = args.port
-    config.rknn_core_num = args.rknn_core_num
+    config.rknn_core_num = (
+        args.rknn_core_num
+        if args.rknn_core_num is not None
+        else platform_npu_core_limit(args.target_platform)
+    )
     config.img_start = args.img_start
     config.img_end = args.img_end
     config.img_content = args.img_content
-    if args.debug:
-        logger.setLevel(logging.DEBUG)
-
-    print("=" * 60)
-    print("Official RKLLM VLM OpenAI API")
-    print(f"  Vision model: {config.encoder_model_path}")
-    print(f"  LLM model: {config.llm_model_path}")
-    print(f"  API: http://127.0.0.1:{args.port}/v1")
-    print("  Runtime: librknnrt.so + librkllmrt.so")
-    print("  Custom service wrapper: removed")
-    print("=" * 60)
+    logger.info(
+        "Configuration: vision_model=%s llm_model=%s platform=%s host=%s "
+        "port=%s api_model=%s vision_cores=%s context=%s temperature=%s "
+        "top_p=%s top_k=%s max_tokens=%s timeout=%ss log_level=%s",
+        config.encoder_model_path,
+        config.llm_model_path,
+        config.platform,
+        args.host,
+        args.port,
+        config.model_name,
+        config.rknn_core_num,
+        config.max_context_len,
+        config.default_temperature,
+        config.default_top_p,
+        config.default_top_k,
+        config.default_max_tokens,
+        config.timeout_seconds,
+        effective_log_level,
+    )
 
     try:
         uvicorn.run(
             app,
             host=args.host,
             port=args.port,
-            log_level="debug" if args.debug else "info",
+            log_level=effective_log_level,
             access_log=True,
             timeout_keep_alive=config.timeout_seconds,
         )
     except KeyboardInterrupt:
-        print("\nServer interrupted by user")
+        logger.info("Server interrupted by user")

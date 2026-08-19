@@ -16,6 +16,7 @@ import time
 import uuid
 import json
 import asyncio
+import logging
 from contextlib import asynccontextmanager
 from concurrent.futures import ThreadPoolExecutor
 from typing import List, Optional, Dict, Any, Generator, Union
@@ -25,6 +26,184 @@ from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel, Field
 import uvicorn
 import argparse
+from dataclasses import dataclass
+
+
+@dataclass(frozen=True)
+class OutputDelta:
+    """One protocol-visible piece of generated output."""
+    channel: str
+    text: str
+
+
+class ThinkingStreamParser:
+    """Separate reasoning from the answer across arbitrary callback chunks."""
+
+    START_MARKERS = (
+        "<thinking>",
+        "<think>",
+        "Thinking Process:",
+        "Okay, so I need",
+        "Okay, I need",
+        "Let me think",
+        "Let's think",
+        "The user wants",
+        "I need to",
+        "Let's analyze",
+        "We need to",
+    )
+    UNMARKED_START_MARKERS = (
+        "Okay, so I need",
+        "Okay, I need",
+        "Let me think",
+        "Let's think",
+        "The user wants",
+        "I need to",
+        "Let's analyze",
+        "We need to",
+    )
+    END_MARKERS = (
+        "</thinking>",
+        "</think>",
+        "Final Answer:",
+        "Final answer:",
+        "*Drafting the response:*",
+        "Drafting the response:",
+    )
+
+    def __init__(self, enabled: bool = False):
+        self.enabled = bool(enabled)
+        self.in_thinking = False
+        self._buffer = ""
+
+    @staticmethod
+    def _marker_at(text: str, start: int, markers: tuple[str, ...]) -> Optional[str]:
+        matches = [marker for marker in markers if text.startswith(marker, start)]
+        return max(matches, key=len) if matches else None
+
+    @staticmethod
+    def _partial_suffix(text: str, markers: tuple[str, ...]) -> str:
+        for size in range(min(len(text), max(map(len, markers))), 0, -1):
+            suffix = text[-size:]
+            if any(marker.startswith(suffix) for marker in markers):
+                return suffix
+        return ""
+
+    def feed(self, text: str) -> List[OutputDelta]:
+        if not text:
+            return []
+        self._buffer += text
+        deltas: List[OutputDelta] = []
+        while self._buffer:
+            markers = self.END_MARKERS if self.in_thinking else self.START_MARKERS + self.END_MARKERS
+            found = None
+            for index in range(len(self._buffer)):
+                marker = self._marker_at(self._buffer, index, markers)
+                if marker:
+                    found = (index, marker)
+                    break
+            if found:
+                index, marker = found
+                orphan_end = not self.in_thinking and marker in self.END_MARKERS
+                unmarked_start = not self.in_thinking and marker in self.UNMARKED_START_MARKERS
+                channel = (
+                    "reasoning_content"
+                    if self.in_thinking or orphan_end or unmarked_start
+                    else "content"
+                )
+                value = self._buffer[:index]
+                if unmarked_start:
+                    value = marker + value
+                if value and (channel == "content" or self.enabled):
+                    deltas.append(OutputDelta(channel, value))
+                self._buffer = self._buffer[index + len(marker):]
+                self.in_thinking = False if orphan_end else True if unmarked_start else not self.in_thinking
+                continue
+            markers_suffix = self._partial_suffix(self._buffer, markers)
+            value = self._buffer[:-len(markers_suffix)] if markers_suffix else self._buffer
+            channel = "reasoning_content" if self.in_thinking else "content"
+            if value and (channel == "content" or self.enabled):
+                deltas.append(OutputDelta(channel, value))
+            self._buffer = markers_suffix
+            break
+        return deltas
+
+    def finish(self) -> List[OutputDelta]:
+        if not self._buffer:
+            return []
+        channel = "reasoning_content" if self.in_thinking else "content"
+        value = self._buffer
+        self._buffer = ""
+        if channel == "reasoning_content" and not self.enabled:
+            return []
+        return [OutputDelta(channel, value)]
+
+
+def thinking_enabled(
+    enable_thinking: Optional[bool] = None,
+    thinking: Optional[Union[bool, Dict[str, Any]]] = None,
+    reasoning_effort: Optional[str] = None,
+) -> bool:
+    if enable_thinking is not None:
+        return bool(enable_thinking)
+    if isinstance(thinking, bool):
+        return thinking
+    if isinstance(thinking, dict):
+        return str(thinking.get("type", "enabled")).lower() not in {
+            "disabled", "disable", "off", "none", "false"
+        }
+    if reasoning_effort is not None:
+        return str(reasoning_effort).lower() not in {"none", "off", "disabled", "false"}
+    return False
+
+
+def model_supports_reasoning(model_name: str) -> bool:
+    name = str(model_name).lower()
+    return any(family in name for family in ("qwen3", "qwen-3", "deepseek-r1", "deepseek_r1"))
+
+
+def model_supports_thinking(model_name: str) -> bool:
+    """Return whether RKLLM can switch thinking on/off for this model family."""
+    name = str(model_name).lower()
+    # RKLLM v1.3.0 documents enable_thinking for Qwen3. DeepSeek-R1
+    # artifacts may emit reasoning, but the tested RK3576 artifact ignores
+    # this switch, so it is not advertised as controllable thinking.
+    return any(family in name for family in ("qwen3", "qwen-3"))
+
+
+def runtime_max_tokens(model_name: str, requested: int, thinking: bool) -> int:
+    """Reserve hidden generation room for reasoning-only model artifacts."""
+    if model_supports_reasoning(model_name):
+        # Reasoning tokens must not consume the visible answer budget. This
+        # also covers DeepSeek-R1 conversions that ignore enable_thinking.
+        return min(4096, requested + max(512, requested * 2))
+    return requested
+
+
+LOG_LEVELS = ("critical", "error", "warning", "info", "debug")
+
+
+def normalize_log_level(value: str) -> str:
+    """Return a logging level accepted by both Python logging and Uvicorn."""
+    level = str(value).strip().lower()
+    if level == "warn":
+        level = "warning"
+    if level not in LOG_LEVELS:
+        valid_levels = ", ".join(LOG_LEVELS)
+        raise ValueError(f"invalid log level {value!r}; use one of: {valid_levels}")
+    return level
+
+
+try:
+    initial_log_level = normalize_log_level(os.environ.get("LOG_LEVEL", "info"))
+except ValueError:
+    initial_log_level = "info"
+
+logging.basicConfig(
+    level=getattr(logging, initial_log_level.upper()),
+    format="%(asctime)s | %(levelname)s | %(name)s | %(message)s",
+)
+logger = logging.getLogger("rkllm")
 
 # ==================== System Library Preloading ====================
 def preload_libraries():
@@ -32,33 +211,33 @@ def preload_libraries():
     try:
         # Set environment variables
         os.environ['LD_LIBRARY_PATH'] = '/usr/lib/aarch64-linux-gnu:/usr/lib:' + os.environ.get('LD_LIBRARY_PATH', '')
-        
+
         # Preload libraries
         libs = [
             'librknnrt.so',
             '/usr/lib/librkllmrt.so'
         ]
-        
+
         for lib in libs:
             try:
                 ctypes.CDLL(lib, mode=ctypes.RTLD_GLOBAL)
-                print(f"✓ Preloaded: {lib}")
+                logger.info("Loaded %s", lib)
             except Exception as e:
-                print(f"⚠ Failed to preload {lib}: {e}")
+                logger.warning("Could not preload %s: %s", lib, e)
     except Exception as e:
-        print(f"⚠ Error during library preloading: {e}")
+        logger.warning("Library preloading failed: %s", e)
 
-print("Preloading system libraries...")
+logger.info("Preloading RKNN/RKLLM system libraries")
 preload_libraries()
 
 # ==================== Load RKLLM Library ====================
 try:
     rkllm_lib = ctypes.CDLL('/usr/lib/librkllmrt.so')
-    print("✓ Successfully loaded librkllmrt.so")
+    logger.info("Loaded librkllmrt.so")
 except Exception as e:
-    print(f"✗ Failed to load librkllmrt.so: {e}")
-    print("Please ensure RKLLM runtime is installed: sudo apt install librkllmrt")
-    sys.exit(1)
+    rkllm_lib = None
+    logger.error("Failed to load librkllmrt.so: %s", e)
+    logger.error("Ensure the RKLLM runtime is installed in the container before starting inference")
 
 # ==================== RKLLM Structure Definitions ====================
 RKLLM_Handle_t = ctypes.c_void_p
@@ -177,12 +356,26 @@ class RKLLMInput(ctypes.Structure):
         ("input_data", RKLLMInputUnion)
     ]
 
+class RKLLMSamplingParam(ctypes.Structure):
+    """Per-request sampling override introduced by RKLLM v1.3.0."""
+    _fields_ = [
+        ("top_k", ctypes.c_int32),
+        ("top_p", ctypes.c_float),
+        ("temperature", ctypes.c_float),
+        ("repeat_penalty", ctypes.c_float),
+        ("frequency_penalty", ctypes.c_float),
+        ("presence_penalty", ctypes.c_float),
+        ("mirostat", ctypes.c_int32),
+        ("mirostat_tau", ctypes.c_float),
+        ("mirostat_eta", ctypes.c_float),
+    ]
+
 class RKLLMInferParam(ctypes.Structure):
     _fields_ = [
         ("mode", ctypes.c_int),
         ("lora_params", ctypes.c_void_p),
         ("prompt_cache_params", ctypes.c_void_p),
-        ("sampling_params", ctypes.c_void_p),
+        ("sampling_params", ctypes.POINTER(RKLLMSamplingParam)),
         ("keep_history", ctypes.c_int),
         ("max_new_tokens", ctypes.c_int32),
     ]
@@ -259,6 +452,7 @@ class ChatCompletionRequest(BaseModel):
     n: Optional[int] = Field(default=1, ge=1, le=10, description="Number of completions to generate")
     stream: Optional[bool] = Field(default=False, description="Whether to stream the response")
     max_tokens: Optional[int] = Field(default=512, ge=1, le=8192, description="Maximum tokens to generate")
+    max_completion_tokens: Optional[int] = Field(default=None, ge=1, le=8192)
     presence_penalty: Optional[float] = Field(default=0.0, ge=-2.0, le=2.0, description="Presence penalty")
     frequency_penalty: Optional[float] = Field(default=0.0, ge=-2.0, le=2.0, description="Frequency penalty")
     logit_bias: Optional[Dict[str, float]] = Field(None, description="Logit bias")
@@ -266,15 +460,25 @@ class ChatCompletionRequest(BaseModel):
     stop: Optional[List[str]] = Field(None, description="Stop sequences")
     tools: Optional[List[Tool]] = Field(None, description="List of tools")
     tool_choice: Optional[str] = Field(None, description="Tool choice")
+    repeat_penalty: Optional[float] = Field(default=1.1, ge=0.0, le=2.0)
+    enable_thinking: Optional[bool] = Field(default=None)
+    reasoning_effort: Optional[str] = Field(default=None)
+    thinking: Optional[Union[bool, Dict[str, Any]]] = Field(default=None)
 
 class UsageInfo(BaseModel):
     prompt_tokens: int = Field(default=0, description="Prompt tokens")
     completion_tokens: int = Field(default=0, description="Completion tokens")
     total_tokens: int = Field(default=0, description="Total tokens")
 
+class AssistantMessage(BaseModel):
+    role: str = "assistant"
+    content: str = ""
+    reasoning_content: Optional[str] = None
+
+
 class ChatCompletionResponseChoice(BaseModel):
     index: int = Field(..., description="Choice index")
-    message: ChatMessage = Field(..., description="Message")
+    message: AssistantMessage = Field(..., description="Message")
     finish_reason: Optional[str] = Field(default="stop", description="Finish reason")
 
 class ChatCompletionResponse(BaseModel):
@@ -289,6 +493,7 @@ class ChatCompletionResponse(BaseModel):
 class DeltaMessage(BaseModel):
     role: Optional[str] = Field(None, description="Role")
     content: Optional[str] = Field(None, description="Content")
+    reasoning_content: Optional[str] = Field(None, description="Reasoning content")
 
 class ChatCompletionStreamResponseChoice(BaseModel):
     index: int = Field(..., description="Choice index")
@@ -308,6 +513,10 @@ class ModelInfo(BaseModel):
     object: str = Field(default="model", description="Object type")
     created: int = Field(..., description="Creation time")
     owned_by: str = Field(default="rkllm", description="Owner")
+    capabilities: List[str] = Field(default_factory=lambda: ["text"])
+    input_modalities: List[str] = Field(default_factory=lambda: ["text"])
+    output_modalities: List[str] = Field(default_factory=lambda: ["text"])
+    reasoning: Dict[str, Any] = Field(default_factory=lambda: {"supported": False})
 
 class ModelsListResponse(BaseModel):
     object: str = Field(default="list", description="Object type")
@@ -333,15 +542,40 @@ class OllamaGenerateRequest(BaseModel):
 # ==================== Global State Management ====================
 class RequestState:
     """State management for individual requests"""
-    def __init__(self, request_id: str):
+    def __init__(self, request_id: str, thinking: bool = False):
         self.request_id = request_id
-        self.text_queue = []
+        self.text_queue: List[OutputDelta] = []
         self.state = -1
         self.completed = threading.Event()
         self.lock = threading.Lock()
         self.full_response = ""
+        self.reasoning_response = ""
+        self.finish_reason = "stop"
+        self.parser = ThinkingStreamParser(thinking)
         self.error = None
         self.start_time = time.time()
+
+    def append_runtime_text(self, text: str) -> None:
+        # v1.3.0 returns EOS tokens when skip_special_token is disabled.
+        # They are runtime sentinels, not assistant-visible content.
+        for marker in ("<｜end▁of▁sentence｜>", "<|endoftext|>", "<|im_end|>"):
+            text = text.replace(marker, "")
+        for delta in self.parser.feed(text):
+            self.text_queue.append(delta)
+            if delta.channel == "reasoning_content":
+                self.reasoning_response += delta.text
+            else:
+                self.full_response += delta.text
+
+    def finish_output(self) -> None:
+        if self.parser.in_thinking:
+            self.finish_reason = "length"
+        for delta in self.parser.finish():
+            self.text_queue.append(delta)
+            if delta.channel == "reasoning_content":
+                self.reasoning_response += delta.text
+            else:
+                self.full_response += delta.text
 
 # Global variables
 request_lock = threading.Lock()
@@ -369,18 +603,19 @@ def callback_impl(result, userdata, state):
     """RKLLM callback function implementation"""
     if not userdata:
         return 0
-    
+
     try:
         request_id = ctypes.cast(userdata, ctypes.c_char_p).value.decode('utf-8')
-        
+
         if request_id not in request_states:
             return 0
-        
+
         req_state = request_states[request_id]
-        
+
         with req_state.lock:
             if state == LLMCallState.RKLLM_RUN_FINISH:
                 req_state.state = state
+                req_state.finish_output()
                 req_state.completed.set()
             elif state == LLMCallState.RKLLM_RUN_ERROR:
                 req_state.state = state
@@ -391,14 +626,13 @@ def callback_impl(result, userdata, state):
                 if result and result.contents.text:
                     try:
                         text = result.contents.text.decode('utf-8', errors='ignore')
-                        req_state.text_queue.append(text)
-                        req_state.full_response += text
+                        req_state.append_runtime_text(text)
                     except Exception as e:
-                        print(f"Callback decoding error: {e}")
-        
+                        logger.exception("[%s] callback decoding failed", request_id)
+
         return 0
     except Exception as e:
-        print(f"Callback function error: {e}")
+        logger.exception("RKLLM callback failed")
         return -1
 
 callback = callback_type(callback_impl)
@@ -419,20 +653,22 @@ class RKLLMModel:
         self.handle = ctypes.c_void_p()
         self.initialized = False
         self.model_lock = threading.Lock()
-        
+
         # Configuration parameters
         self.max_context_len = config.max_context_len
         self.default_temperature = config.default_temperature
         self.default_top_p = config.default_top_p
         self.default_top_k = config.default_top_k
         self.default_max_tokens = config.default_max_tokens
-        
+
     def initialize(self):
         """Initialize the model"""
         with self.model_lock:
             try:
-                print(f"Initializing RKLLM model: {self.model_path}")
-                
+                if rkllm_lib is None:
+                    raise RuntimeError("librkllmrt.so is not available")
+                logger.info("Initializing LLM model: %s", self.model_path)
+
                 # Prepare model parameters
                 rkllm_param = RKLLMParam()
                 rkllm_param.model_path = ctypes.c_char_p(self.model_path.encode('utf-8'))
@@ -448,16 +684,23 @@ class RKLLMModel:
                 rkllm_param.mirostat = 0
                 rkllm_param.mirostat_tau = 5.0
                 rkllm_param.mirostat_eta = 0.1
-                rkllm_param.skip_special_token = True
+                # Keep <think>/</think> markers visible to the protocol parser.
+                # If RKLLM strips them here, reasoning becomes indistinguishable
+                # from the answer and is returned in message.content.
+                rkllm_param.skip_special_token = False
                 rkllm_param.ignore_eos_token = False
                 rkllm_param.is_async = False
-                
+
                 # Extended parameters - critical settings to avoid GGML errors
-                rkllm_param.extend_param.base_domain_id = 0
+                # RKLLM v1.3.0 uses the NPU domain for RK3576/RK3588 and the
+                # default domain for RK3562/RV1126B.
+                rkllm_param.extend_param.base_domain_id = (
+                    1 if self.platform.lower() in {"rk3576", "rk3588", "rk3588s"} else 0
+                )
                 rkllm_param.extend_param.embed_flash = 0  # Set to 0 to avoid GGML assertion error
                 rkllm_param.extend_param.n_batch = 1
                 rkllm_param.extend_param.use_cross_attn = 0
-                
+
                 # Set CPU mask based on platform
                 if self.platform.lower() in ["rk3576", "rk3588", "rk3588s"]:
                     cpu_mask = 0xF0  # CPU 4-7 (big cores)
@@ -465,7 +708,7 @@ class RKLLMModel:
                     cpu_mask = 0x0F  # CPU 0-3
                 rkllm_param.extend_param.enabled_cpus_mask = cpu_mask
                 rkllm_param.extend_param.enabled_cpus_num = cpu_mask.bit_count()
-                
+
                 # Set function prototypes
                 rkllm_init = rkllm_lib.rkllm_init
                 rkllm_init.argtypes = [
@@ -474,69 +717,78 @@ class RKLLMModel:
                     ctypes.POINTER(RKLLMCallback),
                 ]
                 rkllm_init.restype = ctypes.c_int
-                
+
                 # Call initialization
                 ret = rkllm_init(
                     ctypes.byref(self.handle),
                     ctypes.byref(rkllm_param),
                     ctypes.byref(rkllm_callback),
                 )
-                
+
                 if ret != 0:
                     raise RuntimeError(f"RKLLM initialization failed with error code: {ret}")
-                
+
                 self.initialized = True
-                print("✅ RKLLM model initialized successfully!")
+                logger.info("LLM model initialized")
                 return True
-                
+
             except Exception as e:
-                print(f"❌ Model initialization failed: {e}")
+                logger.exception("LLM model initialization failed")
                 return False
-    
-    def generate(self, prompt: str, request_id: str, temperature: float = None, 
-                 top_p: float = None, top_k: int = None, max_tokens: int = None) -> int:
+
+    def generate(
+        self,
+        prompt: str,
+        request_id: str,
+        temperature: float = None,
+        top_p: float = None,
+        top_k: int = None,
+        max_tokens: int = None,
+        frequency_penalty: float = 0.0,
+        presence_penalty: float = 0.0,
+        repeat_penalty: float = 1.1,
+        enable_thinking: bool = False,
+    ) -> int:
         """Generate text with the model"""
         with self.model_lock:
             if not self.initialized:
                 raise RuntimeError("Model not initialized")
-            
+
             try:
-                # First update the model parameters if top_k is provided
-                if top_k is not None:
-                    # Need to update the model's top_k parameter
-                    # Note: RKLLM might require reinitialization or parameter update
-                    # For now, we'll log it and use the value in generation
-                    print(f"[{request_id}] Setting top_k to {top_k}")
-                    
-                    # Update RKLLM parameter structure for this generation
-                    # This might require calling rkllm_set_param or similar function
-                    # For simplicity, we'll use the existing handle with default params
-                    # In a real implementation, you might need to:
-                    # 1. Call a parameter update function if available
-                    # 2. Or handle it differently based on RKLLM API
-                    pass
-                
                 # Prepare input
                 rkllm_input = RKLLMInput()
                 rkllm_input.role = ctypes.c_char_p(b"user")
-                rkllm_input.enable_thinking = False
+                rkllm_input.enable_thinking = bool(enable_thinking)
                 rkllm_input.input_type = RKLLMInputType.RKLLM_INPUT_PROMPT
                 rkllm_input.input_data.prompt_input = ctypes.c_char_p(prompt.encode('utf-8'))
-                
+
+                sampling_params = RKLLMSamplingParam()
+                sampling_params.top_k = top_k or self.default_top_k
+                sampling_params.top_p = top_p if top_p is not None else self.default_top_p
+                sampling_params.temperature = (
+                    temperature if temperature is not None else self.default_temperature
+                )
+                sampling_params.repeat_penalty = repeat_penalty
+                sampling_params.frequency_penalty = frequency_penalty
+                sampling_params.presence_penalty = presence_penalty
+                sampling_params.mirostat = 0
+                sampling_params.mirostat_tau = 5.0
+                sampling_params.mirostat_eta = 0.1
+
                 # Prepare inference parameters
                 infer_param = RKLLMInferParam()
                 infer_param.mode = RKLLMInferMode.RKLLM_INFER_GENERATE
                 infer_param.lora_params = None
                 infer_param.prompt_cache_params = None
-                infer_param.sampling_params = None
+                infer_param.sampling_params = ctypes.pointer(sampling_params)
                 infer_param.keep_history = 0
                 infer_param.max_new_tokens = max_tokens if max_tokens else 0
-                
+
                 # Prepare user data
                 userdata_ptr = None
                 if request_id:
                     userdata_ptr = ctypes.c_char_p(request_id.encode('utf-8'))
-                
+
                 # Set up run function
                 rkllm_run = rkllm_lib.rkllm_run
                 rkllm_run.argtypes = [
@@ -546,17 +798,17 @@ class RKLLMModel:
                     ctypes.c_void_p
                 ]
                 rkllm_run.restype = ctypes.c_int
-                
+
                 # Call run function
-                ret = rkllm_run(self.handle, ctypes.byref(rkllm_input), 
+                ret = rkllm_run(self.handle, ctypes.byref(rkllm_input),
                               ctypes.byref(infer_param), userdata_ptr)
-                
+
                 return ret
-                
+
             except Exception as e:
-                print(f"❌ Generation error: {e}")
+                logger.exception("[%s] generation failed", request_id)
                 return -1
-    
+
     def release(self):
         """Release model resources"""
         with self.model_lock:
@@ -565,17 +817,17 @@ class RKLLMModel:
                     rkllm_destroy = rkllm_lib.rkllm_destroy
                     rkllm_destroy.argtypes = [ctypes.c_void_p]
                     rkllm_destroy.restype = ctypes.c_int
-                    
+
                     ret = rkllm_destroy(self.handle)
                     if ret != 0:
-                        print(f"⚠ rkllm_destroy returned error code: {ret}")
-                    
+                        logger.warning("rkllm_destroy returned error code: %s", ret)
+
                     self.initialized = False
                     self.handle = None
-                    print("✅ Model resources released")
-                    
+                    logger.info("LLM model resources released")
+
                 except Exception as e:
-                    print(f"❌ Error releasing model resources: {e}")
+                    logger.exception("Error releasing LLM model resources")
 
 # ==================== Helper Functions ====================
 def message_text(content: Union[str, List[Dict[str, Any]]]) -> str:
@@ -592,7 +844,7 @@ def message_text(content: Union[str, List[Dict[str, Any]]]) -> str:
 def build_prompt(messages: List[ChatMessage]) -> str:
     """Build prompt from messages"""
     prompt = ""
-    
+
     for msg in messages:
         content = message_text(msg.content)
         if msg.role == 'system':
@@ -601,22 +853,22 @@ def build_prompt(messages: List[ChatMessage]) -> str:
             prompt += f"Human: {content}\n"
         elif msg.role == 'assistant':
             prompt += f"Assistant: {content}\n"
-    
+
     # Ensure it ends with Assistant:
     if not prompt.strip().endswith("Assistant:"):
         prompt += "Assistant:"
-    
+
     return prompt
 
 def estimate_tokens(text: str) -> int:
     """Estimate token count (rough approximation)"""
     if not text:
         return 0
-    
+
     # Simple estimation: Chinese characters ~1.5 tokens, others ~0.3 tokens
     chinese_chars = sum(1 for c in text if '\u4e00' <= c <= '\u9fff')
     other_chars = len(text) - chinese_chars
-    
+
     return int(chinese_chars * 1.5 + other_chars * 0.3)
 
 def reserve_request_slot() -> None:
@@ -669,6 +921,7 @@ def ollama_request_from_chat(request: OllamaChatRequest) -> ChatCompletionReques
         max_tokens=positive_int("num_predict", config.default_max_tokens),
         stop=stop,
         stream=request.stream,
+        enable_thinking=options.get("think") if isinstance(options.get("think"), bool) else None,
     )
 
 def ollama_request_from_generate(request: OllamaGenerateRequest) -> ChatCompletionRequest:
@@ -690,14 +943,22 @@ def ollama_created_at() -> str:
     """Return Ollama's RFC3339-style timestamp without an extra dependency."""
     return time.strftime("%Y-%m-%dT%H:%M:%S.000000000Z", time.gmtime())
 
-def ollama_chunk(model: str, content: str, done: bool = False,
-                 prompt_tokens: int = 0, completion_tokens: int = 0) -> str:
+def ollama_chunk(
+    model: str,
+    content: str = "",
+    done: bool = False,
+    prompt_tokens: int = 0,
+    completion_tokens: int = 0,
+    thinking: str = "",
+) -> str:
     payload = {
         "model": model,
         "created_at": ollama_created_at(),
         "message": {"role": "assistant", "content": content},
         "done": done,
     }
+    if thinking:
+        payload["message"]["thinking"] = thinking
     if done:
         payload.update({
             "done_reason": "stop",
@@ -709,23 +970,42 @@ def ollama_chunk(model: str, content: str, done: bool = False,
 def process_chat_completion(request: ChatCompletionRequest, request_id: str) -> RequestState:
     """Process chat completion request"""
     global rkllm_model
-    
+
     # Create request state
-    req_state = RequestState(request_id)
+    enable_thinking = thinking_enabled(
+        request.enable_thinking, request.thinking, request.reasoning_effort
+    )
+    if (
+        request.enable_thinking is None
+        and request.thinking is None
+        and request.reasoning_effort is None
+        and rkllm_model
+        and model_supports_reasoning(rkllm_model.model_path)
+    ):
+        enable_thinking = True
+    req_state = RequestState(request_id, thinking=enable_thinking)
     request_states[request_id] = req_state
-    
+
     try:
         # Build prompt
         prompt = build_prompt(request.messages)
-        
-        # Print debug information
-        print(f"[{request_id}] Processing request:")
-        print(f"  Prompt length: {len(prompt)} characters")
-        print(f"  Temperature: {request.temperature}")
-        print(f"  Top-p: {request.top_p}")
-        print(f"  Top-k: {request.top_k}")
-        print(f"  Max tokens: {request.max_tokens}")
-        
+
+        logger.info(
+            "[%s] request started: stream=%s messages=%s prompt_chars=%s max_tokens=%s",
+            request_id,
+            request.stream,
+            len(request.messages),
+            len(prompt),
+            request.max_tokens,
+        )
+        logger.debug(
+            "[%s] sampling: temperature=%s top_p=%s top_k=%s",
+            request_id,
+            request.temperature,
+            request.top_p,
+            request.top_k,
+        )
+
         # Run model inference
         ret = rkllm_model.generate(
             prompt=prompt,
@@ -733,30 +1013,38 @@ def process_chat_completion(request: ChatCompletionRequest, request_id: str) -> 
             temperature=request.temperature,
             top_p=request.top_p,
             top_k=request.top_k,
-            max_tokens=request.max_tokens
+            max_tokens=runtime_max_tokens(
+                rkllm_model.model_path,
+                request.max_completion_tokens or request.max_tokens,
+                enable_thinking,
+            ),
+            frequency_penalty=request.frequency_penalty or 0.0,
+            presence_penalty=request.presence_penalty or 0.0,
+            repeat_penalty=request.repeat_penalty or 1.1,
+            enable_thinking=enable_thinking,
         )
-        
+
         if ret != 0:
             req_state.error = f"Model inference failed with code: {ret}"
             req_state.completed.set()
             return req_state
-        
+
         # Wait for completion
         timeout = config.timeout_seconds
-        print(f"[{request_id}] Waiting for inference completion (timeout: {timeout}s)...")
-        
+        logger.debug("[%s] waiting for inference completion (timeout=%ss)", request_id, timeout)
+
         if not req_state.completed.wait(timeout=timeout):
             req_state.error = f"Inference timeout ({timeout}s)"
-            print(f"✗ [{request_id}] {req_state.error}")
-        
-        elapsed = time.time() - req_state.start_time
-        print(f"✅ [{request_id}] Inference completed in {elapsed:.2f}s")
-        
+            logger.error("[%s] %s", request_id, req_state.error)
+        else:
+            elapsed = time.time() - req_state.start_time
+            logger.info("[%s] request completed in %.2fs", request_id, elapsed)
+
         return req_state
-        
+
     except Exception as e:
         error_msg = f"Error processing request {request_id}: {str(e)}"
-        print(f"✗ {error_msg}")
+        logger.exception("[%s] request failed", request_id)
         req_state.error = error_msg
         req_state.completed.set()
         return req_state
@@ -766,82 +1054,77 @@ def process_chat_completion(request: ChatCompletionRequest, request_id: str) -> 
 async def lifespan(app: FastAPI):
     """FastAPI lifespan context manager"""
     global rkllm_model, executor
-    
+
     # Startup
-    print("=" * 60)
-    print("Starting RKLLM OpenAI API Server")
-    print("=" * 60)
-    
+    logger.info("Starting RKLLM LLM API server")
+
     # Initialize thread pool
     executor = ThreadPoolExecutor(
         max_workers=config.max_concurrent_requests + 2,
         thread_name_prefix="rkllm_worker"
     )
-    print("✅ Thread pool initialized")
-    
+    logger.info("Inference worker pool ready: max_concurrent=%s", config.max_concurrent_requests)
+
     # Initialize model
     try:
         rkllm_model = RKLLMModel(args.rkllm_model_path, args.target_platform)
-        
+
         # Apply configuration parameters
         if args.max_context_len:
             config.max_context_len = args.max_context_len
             rkllm_model.max_context_len = args.max_context_len
-        
+
         if args.default_temperature:
             config.default_temperature = args.default_temperature
             rkllm_model.default_temperature = args.default_temperature
-        
+
         if args.default_top_p:
             config.default_top_p = args.default_top_p
             rkllm_model.default_top_p = args.default_top_p
-        
+
         if args.default_top_k:
             config.default_top_k = args.default_top_k
             rkllm_model.default_top_k = args.default_top_k
-        
+
         if args.default_max_tokens:
             config.default_max_tokens = args.default_max_tokens
             rkllm_model.default_max_tokens = args.default_max_tokens
-        
+
         if args.max_concurrent:
             config.max_concurrent_requests = args.max_concurrent
-        
+
         rkllm_model.initialize()
 
         if not rkllm_model.initialized:
             raise RuntimeError("RKLLM model did not initialize")
 
-        display_host = "127.0.0.1" if args.host in ("0.0.0.0", "::") else args.host
-        print("=" * 60)
-        print("✅ API is ready and listening")
-        print(f"  OpenAI API:  http://{display_host}:{args.port}/v1")
-        print(f"  Ollama API:  http://{display_host}:{args.port}/api")
-        print(f"  API docs:    http://{display_host}:{args.port}/docs")
-        print("  Terminal chat: enabled (type /help for commands)")
-        print("=" * 60)
-        
+        # Show the bind address in startup logs.  For Docker this is normally
+        # 0.0.0.0, which makes it clear the service listens on all interfaces.
+        display_host = args.host
+        logger.info("API ready: model=%s platform=%s", api_model_name, args.target_platform)
+        logger.info("OpenAI API: http://%s:%s/v1", display_host, args.port)
+        logger.info("Ollama API: http://%s:%s/api", display_host, args.port)
+        logger.info("API docs: http://%s:%s/docs", display_host, args.port)
+        logger.info("Terminal chat: %s", "disabled" if args.no_chat else "enabled (/help for commands)")
+
     except Exception as e:
-        print(f"❌ Failed to initialize model: {e}")
-        print("Please check:")
-        print("1. Model file exists and is accessible")
-        print("2. RKLLM runtime is properly installed")
-        print("3. OpenCL drivers are installed")
+        logger.exception("Failed to initialize LLM server")
+        logger.error("Check the model file, RKLLM runtime, and device drivers")
         raise
-    
+
     yield
-    
+
     # Shutdown
-    print("\nShutting down server...")
-    
+    logger.info("Shutting down LLM server")
+
     # Clean up request states
     request_states.clear()
-    
+
     # Shutdown thread pool
     if executor:
         executor.shutdown(wait=False)
-        print("✅ Thread pool shut down")
-    
+        logger.info("Inference worker pool stopped")
+
     # Release model
     if rkllm_model:
         rkllm_model.release()
@@ -897,38 +1180,58 @@ async def health_check():
 @app.get("/v1/models", response_model=ModelsListResponse)
 async def list_models():
     """List available models"""
+    model_path = rkllm_model.model_path if rkllm_model else api_model_name
+    reasoning_supported = model_supports_reasoning(model_path)
+    thinking_supported = model_supports_thinking(model_path)
     return ModelsListResponse(
         data=[
             ModelInfo(
                 id=api_model_name,
                 created=int(time.time()),
-                owned_by="rkllm"
+                owned_by="rkllm",
+                capabilities=(
+                    ["text"]
+                    + (["reasoning"] if reasoning_supported else [])
+                    + (["thinking"] if thinking_supported else [])
+                ),
+                reasoning={
+                    "supported": reasoning_supported,
+                    "thinking_control": thinking_supported,
+                },
             )
         ]
     )
 
-@app.post("/v1/chat/completions")
+@app.post(
+    "/v1/chat/completions",
+    response_model=ChatCompletionResponse,
+    response_model_exclude_none=True,
+)
 async def create_chat_completion(request: ChatCompletionRequest):
     """Create chat completion - Fully OpenAI API compatible"""
     reserve_request_slot()
-    
+
     try:
         request_id = f"chatcmpl-{uuid.uuid4().hex[:24]}"
         created = int(time.time())
-        
-        print(f"[{request_id}] New request: stream={request.stream}, messages={len(request.messages)}")
-        if request.top_k is not None:
-            print(f"[{request_id}] Top-k parameter: {request.top_k}")
-        
+
+        logger.info(
+            "[%s] request accepted: stream=%s messages=%s model=%s",
+            request_id,
+            request.stream,
+            len(request.messages),
+            request.model,
+        )
+
         if request.stream:
             # Streaming response
             async def generate_stream():
                 nonlocal request_id
-                
+
                 try:
                     # Submit task to thread pool
                     future = executor.submit(process_chat_completion, request, request_id)
-                    
+
                     # Send initial message - FIXED: use model_dump_json() instead of json()
                     initial_chunk = ChatCompletionStreamResponse(
                         id=request_id,
@@ -943,18 +1246,21 @@ async def create_chat_completion(request: ChatCompletionRequest):
                         ]
                     )
                     yield f"data: {initial_chunk.model_dump_json(exclude_unset=True, ensure_ascii=False)}\n\n"
-                    
+
                     # Stream results
                     start_time = time.time()
                     last_activity = start_time
-                    
+                    stream_error = None
+
                     while True:
                         if request_id in request_states:
                             req_state = request_states[request_id]
-                            
+
                             with req_state.lock:
                                 if req_state.text_queue:
-                                    for text in req_state.text_queue:
+                                    pending = list(req_state.text_queue)
+                                    req_state.text_queue.clear()
+                                    for delta in pending:
                                         chunk = ChatCompletionStreamResponse(
                                             id=request_id,
                                             created=created,
@@ -962,7 +1268,7 @@ async def create_chat_completion(request: ChatCompletionRequest):
                                             choices=[
                                                 ChatCompletionStreamResponseChoice(
                                                     index=0,
-                                                    delta=DeltaMessage(content=text),
+                                                    delta=DeltaMessage(**{delta.channel: delta.text}),
                                                     finish_reason=None
                                                 )
                                             ]
@@ -970,13 +1276,11 @@ async def create_chat_completion(request: ChatCompletionRequest):
                                         # FIXED: use model_dump_json() instead of json()
                                         yield f"data: {chunk.model_dump_json(exclude_unset=True, ensure_ascii=False)}\n\n"
                                         last_activity = time.time()
-                                    
-                                    # Clear sent text
-                                    req_state.text_queue.clear()
-                            
+
                             # Check if completed
                             if req_state.completed.is_set():
                                 if req_state.error:
+                                    stream_error = req_state.error
                                     error_data = {
                                         "error": {
                                             "message": req_state.error,
@@ -985,33 +1289,35 @@ async def create_chat_completion(request: ChatCompletionRequest):
                                     }
                                     yield f"data: {json.dumps(error_data, ensure_ascii=False)}\n\n"
                                 break
-                        
+
                         # Check timeout
-                        if time.time() - last_activity > 30:  # 30 seconds no activity
-                            print(f"[{request_id}] Streaming response timeout")
+                        if time.time() - last_activity > config.timeout_seconds:
+                            stream_error = f"Inference timeout ({config.timeout_seconds}s)"
+                            logger.error("[%s] streaming response timeout", request_id)
+                            yield f"data: {json.dumps({'error': {'message': stream_error}}, ensure_ascii=False)}\n\n"
                             break
-                        
+
                         # Brief wait
                         await asyncio.sleep(0.05)
-                    
-                    # Send completion marker - FIXED: use model_dump_json() instead of json()
-                    done_chunk = ChatCompletionStreamResponse(
-                        id=request_id,
-                        created=created,
-                        model=request.model,
-                        choices=[
-                            ChatCompletionStreamResponseChoice(
-                                index=0,
-                                delta=DeltaMessage(),
-                                finish_reason="stop"
-                            )
-                        ]
-                    )
-                    yield f"data: {done_chunk.model_dump_json(exclude_unset=True, ensure_ascii=False)}\n\n"
+
+                    if stream_error is None:
+                        done_chunk = ChatCompletionStreamResponse(
+                            id=request_id,
+                            created=created,
+                            model=request.model,
+                            choices=[
+                                ChatCompletionStreamResponseChoice(
+                                    index=0,
+                                    delta=DeltaMessage(),
+                                    finish_reason=req_state.finish_reason
+                                )
+                            ]
+                        )
+                        yield f"data: {done_chunk.model_dump_json(exclude_unset=True, ensure_ascii=False)}\n\n"
                     yield "data: [DONE]\n\n"
-                    
+
                 except Exception as e:
-                    print(f"[{request_id}] Stream generation error: {e}")
+                    logger.exception("[%s] stream generation failed", request_id)
                     error_data = {
                         "error": {
                             "message": str(e),
@@ -1019,12 +1325,13 @@ async def create_chat_completion(request: ChatCompletionRequest):
                         }
                     }
                     yield f"data: {json.dumps(error_data, ensure_ascii=False)}\n\n"
+                    yield "data: [DONE]\n\n"
                 finally:
                     # Clean up request state
                     if request_id in request_states:
                         del request_states[request_id]
                     release_request_slot()
-            
+
             return StreamingResponse(
                 generate_stream(),
                 media_type="text/event-stream",
@@ -1034,22 +1341,24 @@ async def create_chat_completion(request: ChatCompletionRequest):
                     "X-Accel-Buffering": "no"
                 }
             )
-            
+
         else:
             # Non-streaming response
             def process_non_stream():
                 nonlocal request_id
-                
+
                 try:
                     req_state = process_chat_completion(request, request_id)
-                    
+
                     if req_state.error:
                         raise HTTPException(status_code=500, detail=req_state.error)
-                    
+
                     # Estimate token usage
                     prompt_tokens = estimate_tokens(build_prompt(request.messages))
-                    completion_tokens = estimate_tokens(req_state.full_response)
-                    
+                    completion_tokens = estimate_tokens(
+                        req_state.full_response + req_state.reasoning_response
+                    )
+
                     # Build response
                     response = ChatCompletionResponse(
                         id=request_id,
@@ -1058,11 +1367,15 @@ async def create_chat_completion(request: ChatCompletionRequest):
                         choices=[
                             ChatCompletionResponseChoice(
                                 index=0,
-                                message=ChatMessage(
-                                    role="assistant",
-                                    content=req_state.full_response
+                                message=AssistantMessage(
+                                    content=req_state.full_response,
+                                    **(
+                                        {"reasoning_content": req_state.reasoning_response}
+                                        if req_state.reasoning_response
+                                        else {}
+                                    ),
                                 ),
-                                finish_reason="stop"
+                                finish_reason=req_state.finish_reason
                             )
                         ],
                         usage=UsageInfo(
@@ -1071,13 +1384,13 @@ async def create_chat_completion(request: ChatCompletionRequest):
                             total_tokens=prompt_tokens + completion_tokens
                         )
                     )
-                    
+
                     return response
                 finally:
                     # Clean up request state
                     if request_id in request_states:
                         del request_states[request_id]
-            
+
             # Execute in thread pool
             try:
                 response = await asyncio.get_event_loop().run_in_executor(
@@ -1088,11 +1401,11 @@ async def create_chat_completion(request: ChatCompletionRequest):
                 raise
             except Exception as e:
                 raise HTTPException(status_code=500, detail=str(e))
-            
+
     except HTTPException:
         raise
     except Exception as e:
-        print(f"[ERROR] Chat completion error: {e}")
+        logger.exception("Chat completion failed")
         raise HTTPException(status_code=500, detail=str(e))
     finally:
         # Streaming requests release their slot when the generator exits.
@@ -1115,8 +1428,12 @@ async def generate_ollama_stream(request: ChatCompletionRequest, request_id: str
                     error = req_state.error
                     full_response = req_state.full_response
 
-                for text in pending:
-                    yield ollama_chunk(request.model, text)
+                for delta in pending:
+                    yield ollama_chunk(
+                        request.model,
+                        content=delta.text if delta.channel == "content" else "",
+                        thinking=delta.text if delta.channel == "reasoning_content" else "",
+                    )
                     last_activity = time.time()
 
                 if completed:
@@ -1128,7 +1445,9 @@ async def generate_ollama_stream(request: ChatCompletionRequest, request_id: str
                             "",
                             done=True,
                             prompt_tokens=estimate_tokens(build_prompt(request.messages)),
-                            completion_tokens=estimate_tokens(full_response),
+                            completion_tokens=estimate_tokens(
+                                full_response + req_state.reasoning_response
+                            ),
                         )
                     break
 
@@ -1165,11 +1484,15 @@ async def ollama_chat(request: OllamaChatRequest):
         return {
             "model": request.model,
             "created_at": ollama_created_at(),
-            "message": {"role": "assistant", "content": req_state.full_response},
+            "message": {
+                "role": "assistant",
+                "content": req_state.full_response,
+                **({"thinking": req_state.reasoning_response} if req_state.reasoning_response else {}),
+            },
             "done": True,
             "done_reason": "stop",
             "prompt_eval_count": estimate_tokens(build_prompt(request.messages)),
-            "eval_count": estimate_tokens(req_state.full_response),
+            "eval_count": estimate_tokens(req_state.full_response + req_state.reasoning_response),
         }
     except HTTPException:
         raise
@@ -1325,14 +1648,14 @@ Examples:
                          --port 8001 --max_concurrent 2 --default_temperature 0.7 --default_top_k 50
         """
     )
-    
+
     # Required arguments
     parser.add_argument('--rkllm_model_path', type=str, required=True,
                        help='Path to RKLLM model file (absolute path)')
     parser.add_argument('--target_platform', type=str, required=True,
                        choices=['rk3588', 'rk3576', 'rk3588s'],
                        help='Target platform: rk3588, rk3576, rk3588s')
-    
+
     # Server parameters
     parser.add_argument('--port', type=int, default=8001,
                        help='Server port (default: 8001)')
@@ -1342,7 +1665,7 @@ Examples:
                        help='Model name returned by the OpenAI/Ollama APIs (default: rkllm-model)')
     parser.add_argument('--no_chat', action='store_true',
                        help='Start the API server without opening the terminal chat')
-    
+
     # Model parameters
     parser.add_argument('--max_context_len', type=int, default=2048,
                        help='Maximum context length (default: 2048)')
@@ -1354,35 +1677,43 @@ Examples:
                        help='Default top_k parameter (default: 1, range: 1-100)')
     parser.add_argument('--default_max_tokens', type=int, default=512,
                        help='Default maximum tokens to generate (default: 512)')
-    
+
     # Performance parameters
     parser.add_argument('--max_concurrent', type=int, default=2,
                        help='Maximum concurrent requests (default: 2)')
     parser.add_argument('--timeout', type=int, default=120,
                        help='Request timeout in seconds (default: 120)')
-    
+
     # Debug parameters
     parser.add_argument('--debug', action='store_true',
                        help='Enable debug mode')
-    
+    parser.add_argument('--log_level', type=str,
+                       default=initial_log_level,
+                       choices=LOG_LEVELS,
+                       help='Log level (default: LOG_LEVEL or info)')
+
     args = parser.parse_args()
-    
+    effective_log_level = "debug" if args.debug else normalize_log_level(args.log_level)
+    numeric_log_level = getattr(logging, effective_log_level.upper())
+    logging.getLogger().setLevel(numeric_log_level)
+    logger.setLevel(numeric_log_level)
+
     # Validate model file
     if not os.path.exists(args.rkllm_model_path):
-        print(f"❌ Error: Model file not found: {args.rkllm_model_path}")
+        logger.error("Model file not found: %s", args.rkllm_model_path)
         sys.exit(1)
-    
+
     # Validate top_k range
     if args.default_top_k < 1 or args.default_top_k > 100:
-        print(f"⚠ Warning: default_top_k should be between 1 and 100, got {args.default_top_k}")
+        logger.warning("default_top_k should be between 1 and 100, got %s", args.default_top_k)
         args.default_top_k = max(1, min(100, args.default_top_k))
-        print(f"  Adjusted to: {args.default_top_k}")
-    
+        logger.info("Adjusted default_top_k to %s", args.default_top_k)
+
     # Convert to absolute path
     args.rkllm_model_path = os.path.abspath(args.rkllm_model_path)
-    
+
     # Apply configuration
-    api_model_name = args.model_name
+    api_model_name = os.environ.get('API_MODEL_NAME') or args.model_name
     config.max_context_len = args.max_context_len
     config.default_temperature = args.default_temperature
     config.default_top_p = args.default_top_p
@@ -1390,23 +1721,24 @@ Examples:
     config.default_max_tokens = args.default_max_tokens
     config.max_concurrent_requests = args.max_concurrent
     config.timeout_seconds = args.timeout
-    
-    # Print configuration
-    print("=" * 60)
-    print("Configuration:")
-    print(f"  Model: {args.rkllm_model_path}")
-    print(f"  Platform: {args.target_platform}")
-    print(f"  Host: {args.host}")
-    print(f"  Port: {args.port}")
-    print(f"  Max context length: {config.max_context_len}")
-    print(f"  Default temperature: {config.default_temperature}")
-    print(f"  Default Top-p: {config.default_top_p}")
-    print(f"  Default Top-k: {config.default_top_k}")
-    print(f"  Default max tokens: {config.default_max_tokens}")
-    print(f"  Max concurrent requests: {config.max_concurrent_requests}")
-    print(f"  Request timeout: {config.timeout_seconds}s")
-    print("=" * 60)
-    
+
+    logger.info(
+        "Configuration: model=%s platform=%s host=%s port=%s api_model=%s "
+        "context=%s temperature=%s top_p=%s top_k=%s max_tokens=%s timeout=%ss log_level=%s",
+        args.rkllm_model_path,
+        args.target_platform,
+        args.host,
+        args.port,
+        api_model_name,
+        config.max_context_len,
+        config.default_temperature,
+        config.default_top_p,
+        config.default_top_k,
+        config.default_max_tokens,
+        config.timeout_seconds,
+        effective_log_level,
+    )
+
     # Start server. Running Uvicorn in a background thread lets this process
     # keep the API available while the main thread owns the terminal chat.
     server = None
@@ -1416,8 +1748,10 @@ Examples:
             app,
             host=args.host,
             port=args.port,
-            log_level="info" if not args.debug else "debug",
-            access_log=True,
+            log_level=effective_log_level,
+            # Access logs share stdout with the terminal chat. Keep them off
+            # while chat owns the interactive terminal.
+            access_log=args.no_chat,
             timeout_keep_alive=30,
             server_header=False,
         )
@@ -1438,15 +1772,15 @@ Examples:
 
         display_host = "127.0.0.1" if args.host in ("0.0.0.0", "::") else args.host
         if not args.no_chat:
-            run_interactive_chat(f"http://{display_host}:{args.port}", args.model_name)
+            run_interactive_chat(f"http://{display_host}:{args.port}", api_model_name)
         else:
-            print("API server is running. Press Ctrl-C to stop it.")
+            logger.info("API server is running; press Ctrl-C to stop it")
             while server_thread.is_alive():
                 time.sleep(1)
     except KeyboardInterrupt:
-        print("\n👋 Server interrupted by user")
+        logger.info("Server interrupted by user")
     except Exception as e:
-        print(f"❌ Server error: {e}")
+        logger.exception("Server error")
         sys.exit(1)
     finally:
         if server is not None:
