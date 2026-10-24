@@ -5,9 +5,18 @@ uses Rockchip's official `librknnrt.so` image encoder and `librkllmrt.so`
 multimodal runtime directly. The custom `librkllm_service.so` wrapper is not
 required or loaded.
 
-The VLM uses the same v1.3.0 environment image as the LLM and selects
+The VLM uses the same v1.3.1 environment image as the LLM and selects
 `MODEL_KIND=vlm` at startup. Mount a matching `.rkllm` language model and
 `.rknn` vision encoder for the same target platform.
+The bundled RKNN runtime and Toolkit Lite wheel are v2.5.0.
+
+Model images set the image size and model profile from their definitions. For
+custom Qwen2.5-VL or Qwen3-VL models, set `VLM_IMAGE_SIZE=448`; for Gemma 4
+set `VLM_MODEL_FAMILY=gemma4`, `VLM_IMAGE_SIZE=480`, and
+`RKLLM_EMBED_FLASH=1`, matching the supplied artifacts. Gemma 4 can also load
+an audio encoder through `AUDIO_MODEL_FILE` (or `AUDIO_MODEL_PATH`) and accept
+a base64 WAV `input_audio` content part. See the matching definition under
+[`models/vlm/`](../models/vlm/) before mounting custom artifacts.
 
 ## Prerequisite
 

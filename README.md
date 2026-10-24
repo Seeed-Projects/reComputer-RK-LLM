@@ -65,7 +65,8 @@ sudo docker run --rm -d \
   ghcr.io/seeed-projects/recomputer-rk-llm/llm/qwen2.5-1.5b-instruct:rk3576-w8a8
 ```
 
-Choose another published image from [Available model definitions](#available-model-definitions).
+Choose another model from [Available model definitions](#available-model-definitions).
+New or updated images must be built and published before they can be pulled.
 The image already contains the converted model and its matching runtime; use
 the [LLM guide](docs/LLM.md) or [VLM guide](docs/VLM.md) for custom model
 files and request examples.
@@ -114,8 +115,17 @@ the values show the available quantization tags for each board:
 | LLM | [MiniCPM4 0.5B](models/llm/minicpm4-0.5b) | `w4a16-g128`, `w8a8` | `w8a8` |
 | LLM | [Llama 3.2 1B Instruct](models/llm/llama-3.2-1b-instruct) | `w4a16-g128`, `w8a8` | `w8a8` |
 | LLM | [Llama 3.2 3B Instruct](models/llm/llama-3.2-3b-instruct) | `w4a16-g128`, `w8a8` | `w8a8` |
+| LLM | [Spark-X2.5 1.7B](models/llm/spark-x2.5-1.7b) | `w4a16-g128`, `w8a8` | `w8a8` |
+| VLM | [Gemma 4 E2B IT](models/vlm/gemma-4-e2b-it) | `w4a16-g128`, `w8a8` | `w8a8` |
+| VLM | [Qwen2.5-VL 3B Instruct](models/vlm/qwen2.5-vl-3b-instruct) | `w4a16-g128`, `w8a8` | `w8a8` |
+| VLM | [Qwen3-VL 2B Instruct](models/vlm/qwen3-vl-2b-instruct) | `w4a16-g128`, `w8a8` | `w8a8` |
+| VLM | [Qwen3-VL 4B Instruct](models/vlm/qwen3-vl-4b-instruct) | `w4a16-g128`, `w8a8` | `w8a8` |
 | VLM | [Qwen3.5 2B](models/vlm/qwen3.5-2b) | `w4a16-g128`, `w8a8` | `w8a8` |
 | VLM | [Qwen3.5 4B](models/vlm/qwen3.5-4b) | `w4a16-g128`, `w8a8` | `w8a8` |
+
+The Gemma 4 VLM definitions for RK3576 retain upstream's preview status:
+vision accuracy is reduced, and the W8A8 artifact also fails exact recall.
+See the definition comments and linked model card before selecting them.
 
 Published image names follow this pattern:
 
@@ -128,10 +138,16 @@ and select the desired scope, model, platform, and quantization.
 
 ## Runtime
 
-The bundled RKLLM runtime is v1.3.0. The ctypes definitions in
+The bundled RKLLM runtime is v1.3.1, with RKNN runtime and Toolkit Lite 2
+v2.5.0. The ctypes definitions in
 [`app/fastapi_server_llm.py`](app/fastapi_server_llm.py) and
 [`app/fastapi_server_vlm.py`](app/fastapi_server_vlm.py) match that ABI.
 Runtime artifacts are kept under [`runtime/`](runtime/).
+
+The servers include per-request cache reset and Gemma 4 image/audio support.
+Model weights remain downloads performed by the model-image build workflow.
+Build the environment image first, then rebuild the selected model images to
+include the updated runtime.
 
 ## Configuration
 
@@ -141,10 +157,14 @@ Runtime artifacts are kept under [`runtime/`](runtime/).
 | `MODEL_FILE` | empty | Model filename under `/app/models` |
 | `MODEL_KIND` | `llm` | `llm` or `vlm` |
 | `VISION_MODEL_FILE` | empty | VLM `.rknn` filename |
+| `AUDIO_MODEL_FILE` | empty | Optional Gemma 4 `.rknn` audio encoder filename |
+| `VLM_MODEL_FAMILY` | `auto` | Model profile: `auto`, `qwen`, or `gemma4` |
+| `VLM_IMAGE_SIZE` | `392` | Image size; model images supply the matching value |
+| `RKLLM_EMBED_FLASH` | `0` | Embedding flash mode; model images supply the matching value |
 | `TARGET_PLATFORM` | `auto` | `rk3576`, `rk3588`, or `rk3588s` |
 | `RUN_FREQ_FIX` | `true` | Apply board frequency setup |
 | `PORT` | `8001` | HTTP port |
-| `API_MODEL_NAME` | `rkllm-model` | Public API model name |
+| `API_MODEL_NAME` | `rkllm-model` (LLM), `rkllm-vision` (VLM) | Public API model name |
 | `INTERACTIVE_CHAT` | `false` | Enable terminal chat for LLM |
 
 ## Repository layout

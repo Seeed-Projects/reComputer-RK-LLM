@@ -1,6 +1,6 @@
 # LLM deployment on reComputer boards
 
-The LLM container uses the v1.3.0 RKLLM runtime and exposes both OpenAI- and
+The LLM container uses the v1.3.1 RKLLM runtime and exposes both OpenAI- and
 Ollama-compatible endpoints.
 
 ## Run a custom model
