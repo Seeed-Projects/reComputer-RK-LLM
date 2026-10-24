@@ -11,6 +11,16 @@ vision-language models (VLMs) on Seeed Studio reComputer boards with Rockchip
 RK3576 and RK3588-family processors. The bundled servers expose
 OpenAI-compatible APIs, with an Ollama-compatible chat endpoint for LLMs.
 
+## reComputer AI Lab
+
+reComputer AI Lab is Seeed Studio's platform for discovering and deploying
+AI models on reComputer edge devices. Browse models for your hardware and
+find deployment tools for computer vision, LLMs, and VLMs.
+
+[![Browse RK3576 models in reComputer AI Lab](https://files.seeedstudio.com/Edge_box/reComputer_Lab.webp)](https://sensecraft.seeed.cc/ai-lab/en/models?device=rk3576)
+
+[Browse RK3576 models in reComputer AI Lab](https://sensecraft.seeed.cc/ai-lab/en/models?device=rk3576).
+
 ## Hardware
 
 This project targets reComputer RK3576 and reComputer RK3588 boards with a
