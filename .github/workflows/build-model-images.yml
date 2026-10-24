@@ -4,46 +4,46 @@ on:
   workflow_dispatch:
     inputs:
       scope:
-        description: "Build all models, one model, or one exact configuration"
+        description: "Build target: all models, one model with all variants, or one exact variant"
         required: true
         default: all
         type: choice
         options: [all, model, configuration]
       model_kind:
-        description: "Model family for model/configuration scope"
+        description: Model family filter; used only for model or configuration scope
         required: false
         default: llm
         type: choice
         options: [llm, vlm]
       model_id:
-        description: "Model directory name"
+        description: Model directory name; used only for model or configuration scope
         required: false
         type: string
       platform:
-        description: "Target platform"
+        description: Target platform for configuration scope, or all supported platforms
         required: false
         default: all
         type: choice
         options: [all, rk3576, rk3588]
       quantization:
-        description: "Quantization variant without .env"
+        description: Quantization variant without .env; used for configuration scope
         required: false
         type: string
       model_url:
-        description: "Optional model URL override"
+        description: Optional LLM artifact URL override for configuration scope
         required: false
         type: string
       vision_model_url:
-        description: "Optional VLM vision model URL override"
+        description: Optional VLM vision artifact URL override for configuration scope
         required: false
         type: string
       base_tag:
-        description: "Environment image tag"
+        description: Environment image tag used as the model image base
         required: true
         default: env-latest
         type: string
       image_tag:
-        description: "Optional published image tag override"
+        description: Optional tag override for one exact configuration; unavailable with platform=all
         required: false
         type: string
 
@@ -52,7 +52,7 @@ permissions:
   packages: write
 
 concurrency:
-  group: rkllm-model-images-${{ github.ref }}
+  group: model-images-${{ github.ref }}
   cancel-in-progress: false
 
 jobs:
@@ -78,27 +78,34 @@ jobs:
           INPUT_IMAGE_TAG: ${{ inputs.image_tag }}
         run: |
           set -euo pipefail
-          BUILD_SCOPE="${BUILD_SCOPE:-all}"
-          INPUT_MODEL_KIND="${INPUT_MODEL_KIND:-llm}"
-          INPUT_PLATFORM="${INPUT_PLATFORM:-all}"
 
           if [[ "$BUILD_SCOPE" == "model" || "$BUILD_SCOPE" == "configuration" ]]; then
             [[ "$INPUT_MODEL_KIND" =~ ^(llm|vlm)$ ]]
-            [[ "${INPUT_MODEL_ID:-}" =~ ^[a-z0-9][a-z0-9._-]*$ ]]
+            [[ "$INPUT_MODEL_ID" =~ ^[a-z0-9][a-z0-9._-]*$ ]]
             test -d "models/$INPUT_MODEL_KIND/$INPUT_MODEL_ID"
           fi
           if [[ "$BUILD_SCOPE" == "configuration" ]]; then
             [[ "$INPUT_PLATFORM" =~ ^(all|rk(3576|3588))$ ]]
-            [[ "${INPUT_QUANTIZATION:-}" =~ ^[a-z0-9][a-z0-9._-]*$ ]]
+            [[ "$INPUT_QUANTIZATION" =~ ^[a-z0-9][a-z0-9._-]*$ ]]
+            if [[ "$INPUT_PLATFORM" != "all" ]]; then
+              test -f "models/$INPUT_MODEL_KIND/$INPUT_MODEL_ID/$INPUT_PLATFORM/$INPUT_QUANTIZATION.env"
+            fi
           elif [[ "$BUILD_SCOPE" != "all" && "$BUILD_SCOPE" != "model" ]]; then
             echo "Unsupported build scope: $BUILD_SCOPE" >&2
             exit 1
           fi
-          if [[ -n "${INPUT_MODEL_URL:-}${INPUT_VISION_MODEL_URL:-}${INPUT_IMAGE_TAG:-}" ]]; then
-            [[ "$BUILD_SCOPE" == "configuration" && "$INPUT_PLATFORM" != "all" ]] || {
-              echo "URL and image-tag overrides require one exact configuration and platform." >&2
-              exit 1
-            }
+          if [[ "$BUILD_SCOPE" != "configuration" && ( -n "$INPUT_MODEL_URL" || -n "$INPUT_VISION_MODEL_URL" ) ]]; then
+            echo "URL overrides require configuration scope." >&2
+            exit 1
+          fi
+          if [[ "$BUILD_SCOPE" != "configuration" && -n "$INPUT_IMAGE_TAG" ]]; then
+            echo "image_tag requires configuration scope." >&2
+            exit 1
+          fi
+          if [[ "$BUILD_SCOPE" == "configuration" && "$INPUT_PLATFORM" == "all" && -n "$INPUT_IMAGE_TAG" ]]; then
+            echo "image_tag cannot be used with platform=all because platform builds would overwrite the same tag." >&2
+            echo "Leave image_tag empty to use unique <platform>-<quantization> tags." >&2
+            exit 1
           fi
 
           entries='[]'
@@ -151,6 +158,7 @@ jobs:
           set -a; source "$definition"; set +a
           MODEL_KIND="${MODEL_KIND:-$INPUT_MODEL_KIND}"
           [[ "$MODEL_KIND" == "$INPUT_MODEL_KIND" ]]
+          [[ "${RKLLM_EMBED_FLASH:-0}" =~ ^[01]$ ]]
           MODEL_URL="${INPUT_MODEL_URL:-${MODEL_URL:-}}"
           VISION_MODEL_URL="${INPUT_VISION_MODEL_URL:-${VISION_MODEL_URL:-}}"
           test -n "$MODEL_URL"; test -n "${MODEL_FILE:-}"; test -n "${RKLLM_TOOLKIT_VERSION:-}"
@@ -159,24 +167,20 @@ jobs:
             test -n "$VISION_MODEL_URL"; test -n "${VISION_MODEL_FILE:-}"
             [[ "$VISION_MODEL_FILE" =~ ^[A-Za-z0-9][A-Za-z0-9._-]*\.rknn$ ]]
           fi
+          if [[ -n "${AUDIO_MODEL_URL:-}${AUDIO_MODEL_FILE:-}${AUDIO_MODEL_SHA256:-}" ]]; then
+            [[ "$MODEL_KIND" == "vlm" ]]
+            test -n "${AUDIO_MODEL_URL:-}"; test -n "${AUDIO_MODEL_FILE:-}"
+            [[ "$AUDIO_MODEL_FILE" =~ ^[A-Za-z0-9][A-Za-z0-9._-]*\.rknn$ ]]
+            [[ "${AUDIO_MODEL_SHA256:-}" =~ ^[a-fA-F0-9]{64}$ ]]
+            [[ "$AUDIO_MODEL_FILE" != "$VISION_MODEL_FILE" ]]
+          fi
           base_image="ghcr.io/${GITHUB_REPOSITORY,,}"
           image="$base_image/$INPUT_MODEL_KIND/$INPUT_MODEL_ID"
           default_tag="$INPUT_PLATFORM-$INPUT_QUANTIZATION"
           tag="${INPUT_IMAGE_TAG:-$default_tag}"
           [[ "$tag" =~ ^[A-Za-z0-9_][A-Za-z0-9_.-]{0,127}$ ]]
           {
-            echo "model_kind=$MODEL_KIND"
-            echo "url=$MODEL_URL"
-            echo "file=$MODEL_FILE"
-            echo "platform=$INPUT_PLATFORM"
-            echo "toolkit_version=$RKLLM_TOOLKIT_VERSION"
-            echo "sha256=${MODEL_SHA256:-}"
-            echo "vision_url=$VISION_MODEL_URL"
-            echo "vision_file=${VISION_MODEL_FILE:-}"
-            echo "vision_sha256=${VISION_MODEL_SHA256:-}"
-            echo "base_image=$base_image"
-            echo "image=$image"
-            echo "tag=$tag"
+            echo "model_kind=$MODEL_KIND"; echo "url=$MODEL_URL"; echo "file=$MODEL_FILE"; echo "platform=$INPUT_PLATFORM"; echo "toolkit_version=$RKLLM_TOOLKIT_VERSION"; echo "sha256=${MODEL_SHA256:-}"; echo "vision_url=$VISION_MODEL_URL"; echo "vision_file=${VISION_MODEL_FILE:-}"; echo "vision_sha256=${VISION_MODEL_SHA256:-}"; echo "audio_url=${AUDIO_MODEL_URL:-}"; echo "audio_file=${AUDIO_MODEL_FILE:-}"; echo "audio_sha256=${AUDIO_MODEL_SHA256:-}"; echo "model_family=${VLM_MODEL_FAMILY:-auto}"; echo "image_size=${VLM_IMAGE_SIZE:-392}"; echo "embed_flash=${RKLLM_EMBED_FLASH:-0}"; echo "base_image=$base_image"; echo "image=$image"; echo "tag=$tag"
           } >> "$GITHUB_OUTPUT"
 
       - name: Download model artifacts
@@ -188,6 +192,9 @@ jobs:
           VISION_MODEL_URL: ${{ steps.model.outputs.vision_url }}
           VISION_MODEL_FILE: ${{ steps.model.outputs.vision_file }}
           VISION_MODEL_SHA256: ${{ steps.model.outputs.vision_sha256 }}
+          AUDIO_MODEL_URL: ${{ steps.model.outputs.audio_url }}
+          AUDIO_MODEL_FILE: ${{ steps.model.outputs.audio_file }}
+          AUDIO_MODEL_SHA256: ${{ steps.model.outputs.audio_sha256 }}
           MODEL_DOWNLOAD_TOKEN: ${{ secrets.MODEL_DOWNLOAD_TOKEN }}
         run: |
           set -euo pipefail
@@ -201,6 +208,7 @@ jobs:
           }
           download "$MODEL_URL" "$MODEL_FILE" "$MODEL_SHA256"
           if [[ -n "$VISION_MODEL_FILE" ]]; then download "$VISION_MODEL_URL" "$VISION_MODEL_FILE" "$VISION_MODEL_SHA256"; fi
+          if [[ -n "$AUDIO_MODEL_FILE" ]]; then download "$AUDIO_MODEL_URL" "$AUDIO_MODEL_FILE" "$AUDIO_MODEL_SHA256"; fi
 
       - uses: docker/setup-qemu-action@v3
       - uses: docker/setup-buildx-action@v3
@@ -218,13 +226,17 @@ jobs:
           platforms: linux/arm64
           push: true
           build-args: |
-            BASE_IMAGE=${{ steps.model.outputs.base_image }}:${{ inputs.base_tag || 'env-latest' }}
+            BASE_IMAGE=${{ steps.model.outputs.base_image }}:${{ inputs.base_tag }}
             MODEL_KIND=${{ steps.model.outputs.model_kind }}
-            MODEL_ID=${{ matrix.model_id }}
+            MODEL_ID=${{ matrix.model_id }}:${{ matrix.platform }}-${{ matrix.quantization }}
             MODEL_FILE=${{ steps.model.outputs.file }}
             VISION_MODEL_FILE=${{ steps.model.outputs.vision_file }}
+            AUDIO_MODEL_FILE=${{ steps.model.outputs.audio_file }}
+            VLM_MODEL_FAMILY=${{ steps.model.outputs.model_family }}
             TARGET_PLATFORM=${{ matrix.platform }}
             RKLLM_TOOLKIT_VERSION=${{ steps.model.outputs.toolkit_version }}
+            VLM_IMAGE_SIZE=${{ steps.model.outputs.image_size }}
+            RKLLM_EMBED_FLASH=${{ steps.model.outputs.embed_flash }}
           tags: |
             ${{ steps.model.outputs.image }}:${{ steps.model.outputs.tag }}
             ${{ steps.model.outputs.image }}:${{ steps.model.outputs.tag }}-${{ github.sha }}

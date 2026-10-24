@@ -1,5 +1,12 @@
 .git
 .github
-tools
+.DS_Store
+**/.DS_Store
 **/__pycache__
-*.pyc
+**/*.pyc
+models/**/*.rkllm
+!models/.build/**/*.rkllm
+!models/.build/**/*.rknn
+!models/.build/
+!models/.build/**
+tools
