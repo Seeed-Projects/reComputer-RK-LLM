@@ -3,10 +3,10 @@ FROM python:3.11-slim-bookworm
 
 ARG TARGETARCH
 ARG VERSION=dev
-ARG RKLLM_RUNTIME_VERSION=1.3.0
+ARG RKLLM_RUNTIME_VERSION=1.3.1
 
 LABEL org.opencontainers.image.title="RKLLM runtime" \
-      org.opencontainers.image.description="ARM64 RKLLM OpenAI-compatible runtime" \
+      org.opencontainers.image.description="ARM64 RKLLM OpenAI-compatible API runtime" \
       org.opencontainers.image.version="${VERSION}" \
       io.rkllm.runtime.version="${RKLLM_RUNTIME_VERSION}"
 
@@ -19,6 +19,7 @@ ENV PYTHONDONTWRITEBYTECODE=1 \
     VISION_MODEL_PATH= \
     VISION_MODEL_FILE= \
     API_MODEL_NAME= \
+    LOG_LEVEL=info \
     INTERACTIVE_CHAT=false \
     RKLLM_RUNTIME_VERSION=${RKLLM_RUNTIME_VERSION} \
     TARGET_PLATFORM=auto \
@@ -40,6 +41,7 @@ RUN ldconfig \
     && rm -rf /tmp/wheels /tmp/requirements.txt
 
 WORKDIR /app
+COPY runtime/LICENSE.rkllm /usr/share/doc/rkllm/
 COPY app/fastapi_server_llm.py /app/fastapi_server_llm.py
 COPY app/fastapi_server_vlm.py /app/fastapi_server_vlm.py
 COPY scripts/fix_freq*.sh /app/

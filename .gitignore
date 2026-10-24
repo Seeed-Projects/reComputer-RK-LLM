@@ -54,3 +54,6 @@ Thumbs.db
 models/.build/
 config.py
 secrets.py
+
+# Redistribution notice for the bundled Rockchip runtime
+!runtime/LICENSE.rkllm
